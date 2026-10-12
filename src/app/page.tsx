@@ -8,10 +8,12 @@ import { ScanEntry, AppSettings } from '@/types';
 import { 
   Calendar, Download, Upload, Plus, AlertCircle, FileSpreadsheet, 
   ChevronLeft, ChevronRight, Lock, Unlock, Wifi, WifiOff, Loader2,
-  Database, RefreshCw, LogOut, User as UserIcon
+  Database, RefreshCw, LogOut, User as UserIcon, Ban, RotateCcw
 } from 'lucide-react';
 import ExcelSheetView from '@/components/ExcelSheetView';
 import LoginView from '@/components/LoginView';
+import DuplicateModal, { DuplicateModalData } from '@/components/DuplicateModal';
+import StatusBarcodesModal from '@/components/StatusBarcodesModal';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 const DEFAULT_HEADERS = ["Delhivery", "Amazon", "Instamart", "CRED", "Flipkart", "Blinkit"];
@@ -24,6 +26,13 @@ function DispatchScannerApp() {
   // Auth State
   const [currentUser, setCurrentUser] = useState<{ username: string; name?: string; role?: string } | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  // Duplicate Modal State
+  const [duplicateModalData, setDuplicateModalData] = useState<DuplicateModalData | null>(null);
+  const [isMarkingDuplicate, setIsMarkingDuplicate] = useState(false);
+
+  // Status Barcodes Modal (Cancelled / RTO)
+  const [statusModalType, setStatusModalType] = useState<'CANCELLED' | 'RTO' | null>(null);
 
   // Check auth session on load
   useEffect(() => {
@@ -129,6 +138,17 @@ function DispatchScannerApp() {
     refetchInterval: 3000,
   });
 
+  // 4. Fetch Duplicate Attempts for active date
+  const { data: duplicates = [], refetch: refetchDuplicates } = useQuery({
+    queryKey: ['duplicates', date],
+    queryFn: async () => {
+      const res = await fetch(`/api/duplicates?date=${date}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 3000,
+  });
+
   // Mutation: Add Scan directly to PostgreSQL
   const scanMutation = useMutation({
     mutationFn: async (newScan: { barcode: string; companyId: string; dispatchDate: string }) => {
@@ -155,7 +175,8 @@ function DispatchScannerApp() {
           barcode: newScan.barcode, 
           column: newScan.companyId, 
           scannedAt: new Date().toISOString(), 
-          source: 'Scanned' 
+          source: 'Scanned',
+          status: 'DISPATCHED'
         }
       ]);
       setRecentScanId(tempId);
@@ -179,6 +200,18 @@ function DispatchScannerApp() {
             setDuplicateFlashId(existingMatch.id);
             setTimeout(() => setDuplicateFlashId(''), 3000);
           }
+
+          // Trigger Duplicate Popup Modal!
+          setDuplicateModalData({
+            barcode: newScan.barcode,
+            attemptedCompany: newScan.companyId,
+            existingScanId: parsed.existing?.id || existingMatch?.id || '',
+            existingCompany: existingCol,
+            existingDate: parsed.existing?.dispatchDate || date,
+            existingScannedAt: parsed.existing?.scannedAt,
+            duplicateAttemptId: parsed.duplicateAttemptId,
+          });
+          refetchDuplicates();
         } else {
           setStatusMsg({ type: 'error', title: 'Scan Error', text: parsed.message || 'Failed to save scan.' });
         }
@@ -193,6 +226,7 @@ function DispatchScannerApp() {
       setTimeout(() => setStatusMsg(null), 1500);
       queryClient.invalidateQueries({ queryKey: ['scans', date] });
       refetchDates();
+      refetchDuplicates();
     },
   });
 
@@ -226,18 +260,19 @@ function DispatchScannerApp() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['scans', date] });
       refetchDates();
+      refetchDuplicates();
       setStatusMsg({ type: 'success', title: 'Deleted', text: 'Barcode removed from sheet.' });
       setTimeout(() => setStatusMsg(null), 1500);
     },
   });
 
-  // Mutation: Update Scan (Edit Barcode or Column)
+  // Mutation: Update Scan (Edit Barcode, Column, or Status)
   const updateMutation = useMutation({
-    mutationFn: async ({ id, barcode, companyId }: { id: string; barcode: string; companyId: string }) => {
+    mutationFn: async ({ id, barcode, companyId, status }: { id: string; barcode?: string; companyId?: string; status?: string }) => {
       const res = await fetch('/api/scans', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, barcode, companyId }),
+        body: JSON.stringify({ id, barcode, companyId, status }),
       });
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
@@ -245,12 +280,17 @@ function DispatchScannerApp() {
       }
       return res.json();
     },
-    onMutate: async ({ id, barcode, companyId }) => {
+    onMutate: async ({ id, barcode, companyId, status }) => {
       await queryClient.cancelQueries({ queryKey: ['scans', date] });
       const previousScans = queryClient.getQueryData<ScanEntry[]>(['scans', date]);
       if (previousScans) {
         queryClient.setQueryData<ScanEntry[]>(['scans', date], old => 
-          (old || []).map(s => s.id === id ? { ...s, barcode, column: companyId || s.column } : s)
+          (old || []).map(s => s.id === id ? { 
+            ...s, 
+            barcode: barcode || s.barcode, 
+            column: companyId || s.column,
+            status: status || s.status,
+          } : s)
         );
       }
       return { previousScans };
@@ -267,10 +307,71 @@ function DispatchScannerApp() {
       playSuccessSound();
       queryClient.invalidateQueries({ queryKey: ['scans', date] });
       refetchDates();
-      setStatusMsg({ type: 'success', title: 'Updated', text: `Scan updated to ${data.scan.barcode} (${data.scan.column}).` });
+      refetchDuplicates();
+      setStatusMsg({ type: 'success', title: 'Updated', text: `Scan updated to ${data.scan.barcode} (${data.scan.column} - ${data.scan.status}).` });
       setTimeout(() => setStatusMsg(null), 2000);
     },
   });
+
+  // Handle Mark Status from Duplicate Modal Popup
+  const handleMarkDuplicateStatus = async (status: 'CANCELLED' | 'RTO') => {
+    if (!duplicateModalData) return;
+    setIsMarkingDuplicate(true);
+    try {
+      const res = await fetch('/api/scans', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: duplicateModalData.existingScanId,
+          status,
+          duplicateAttemptId: duplicateModalData.duplicateAttemptId,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to update duplicate status");
+
+      playSuccessSound();
+      queryClient.invalidateQueries({ queryKey: ['scans', date] });
+      refetchDuplicates();
+      setStatusMsg({
+        type: 'warning',
+        title: `Marked as ${status}`,
+        text: `Barcode ${duplicateModalData.barcode} marked as ${status}.`,
+      });
+      setTimeout(() => setStatusMsg(null), 3000);
+      setDuplicateModalData(null);
+      refocusInput();
+    } catch (e: any) {
+      playErrorSound();
+      alert("Failed to mark duplicate: " + e.message);
+    } finally {
+      setIsMarkingDuplicate(false);
+    }
+  };
+
+  // Handle Mark Status from Duplicate Attempts Tab
+  const handleMarkDuplicateFromTab = async (duplicateId: string, existingScanId: string, status: 'CANCELLED' | 'RTO') => {
+    try {
+      const res = await fetch('/api/duplicates', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: duplicateId, existingScanId, status }),
+      });
+      if (!res.ok) throw new Error("Failed to update duplicate status");
+
+      playSuccessSound();
+      queryClient.invalidateQueries({ queryKey: ['scans', date] });
+      refetchDuplicates();
+      setStatusMsg({
+        type: 'success',
+        title: 'Status Updated',
+        text: `Duplicate record marked as ${status}.`,
+      });
+      setTimeout(() => setStatusMsg(null), 2500);
+    } catch (e: any) {
+      playErrorSound();
+      alert("Error updating duplicate: " + e.message);
+    }
+  };
 
   // Mutation: Add Custom Company
   const addCompanyMutation = useMutation({
@@ -469,14 +570,8 @@ function DispatchScannerApp() {
 
         {/* Right Header Controls: Database Status, Export, Backup, User info & Logout */}
         <div className="flex items-center space-x-3">
-          {/* PostgreSQL DB status */}
-          <div 
-            title="Connected to PostgreSQL database"
-            className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center space-x-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>PostgreSQL</span>
-          </div>
+         
+         
 
           {/* Export Excel Button */}
           <a 
@@ -562,7 +657,7 @@ function DispatchScannerApp() {
               </button>
             </div>
 
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5">
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 max-h-52 overflow-y-auto pr-1">
               {headers.map((header, idx) => {
                 const isActive = activeHeader === header;
                 const count = scans.filter(e => e.column === header).length;
@@ -618,6 +713,39 @@ function DispatchScannerApp() {
                   autoFocus 
                 />
               </form>
+
+              {/* Status Section Buttons (Cancelled & RTO) */}
+              <div className="grid grid-cols-2 gap-2 mt-2.5">
+                <button
+                  type="button"
+                  onClick={() => setStatusModalType('CANCELLED')}
+                  className="flex items-center justify-between px-3 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 transition-all font-bold text-xs shadow-xs hover:shadow-sm cursor-pointer"
+                  title="View all Cancelled barcodes for this date"
+                >
+                  <div className="flex items-center space-x-1.5">
+                    <Ban className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Cancelled</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-rose-600 text-white shadow-xs">
+                    {scans.filter(s => s.status === 'CANCELLED').length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStatusModalType('RTO')}
+                  className="flex items-center justify-between px-3 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 transition-all font-bold text-xs shadow-xs hover:shadow-sm cursor-pointer"
+                  title="View all RTO barcodes for this date"
+                >
+                  <div className="flex items-center space-x-1.5">
+                    <RotateCcw className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>RTO</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-amber-600 text-white shadow-xs">
+                    {scans.filter(s => s.status === 'RTO').length}
+                  </span>
+                </button>
+              </div>
             </div>
 
             {/* Notification / Sound Alert Banner */}
@@ -655,12 +783,15 @@ function DispatchScannerApp() {
           ) : (
             <ExcelSheetView 
               date={formatFileDate(date)}
+              rawDate={date}
               entries={scans}
+              duplicates={duplicates}
               settings={{ headers, activeHeader }}
               recentScanId={recentScanId}
               duplicateFlashId={duplicateFlashId}
               onDelete={(id) => deleteMutation.mutate(id)}
-              onUpdate={(id, newBarcode, newCompany) => updateMutation.mutate({ id, barcode: newBarcode, companyId: newCompany })}
+              onUpdate={(id, newBarcode, newCompany, status) => updateMutation.mutate({ id, barcode: newBarcode, companyId: newCompany, status })}
+              onMarkDuplicateStatus={handleMarkDuplicateFromTab}
               onRefocusInput={refocusInput}
               isReadOnly={isReadOnly}
               onUnlock={() => setIsPastUnlocked(true)}
@@ -668,6 +799,30 @@ function DispatchScannerApp() {
           )}
         </div>
       </main>
+
+      {/* Duplicate Barcode Popup Modal */}
+      <DuplicateModal 
+        data={duplicateModalData}
+        onClose={() => { setDuplicateModalData(null); refocusInput(); }}
+        onMarkStatus={handleMarkDuplicateStatus}
+        isLoading={isMarkingDuplicate}
+      />
+
+      {/* Cancelled / RTO Barcodes List Modal */}
+      <StatusBarcodesModal 
+        isOpen={statusModalType !== null}
+        onClose={() => { setStatusModalType(null); refocusInput(); }}
+        initialStatus={statusModalType || 'CANCELLED'}
+        date={formatFileDate(date)}
+        scans={scans}
+        duplicates={duplicates}
+        onUpdateScanStatus={async (id, status) => {
+          await updateMutation.mutateAsync({ id, status });
+        }}
+        onDeleteScan={async (id) => {
+          await deleteMutation.mutateAsync(id);
+        }}
+      />
 
       {/* Add Custom Column Modal */}
       {showAddColumnModal && (
