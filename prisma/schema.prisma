@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  name         String?
+  username     String     @unique
+  passwordHash String
+  role         Role       @default(OPERATOR)
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  
+  scans        Scan[]     @relation("ScannedBy")
+  deletedScans Scan[]     @relation("DeletedBy")
+  duplicateAttempts DuplicateAttempt[]
+  auditLogs    AuditLog[]
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  isDefault Boolean  @default(false)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  
+  scans             Scan[]
+  duplicateAttempts DuplicateAttempt[]
+}
+
+model Scan {
+  id                String    @id @default(cuid())
+  barcode           String
+  barcodeNormalized String
+  companyId         String
+  dispatchDate      String    // YYYY-MM-DD in IST
+  scannedAt         DateTime  @db.Timestamptz
+  scannedById       String?
+  source            Source    @default(SCANNED)
+  deletedAt         DateTime?
+  deletedById       String?
+  deleteReason      String?
+
+  company   Company @relation(fields: [companyId], references: [id])
+  scannedBy User?   @relation("ScannedBy", fields: [scannedById], references: [id])
+  deletedBy User?   @relation("DeletedBy", fields: [deletedById], references: [id])
+
+  duplicateAttempts DuplicateAttempt[]
+
+  @@index([dispatchDate])
+  @@index([companyId])
+  @@index([barcodeNormalized])
+}
+
+enum Source {
+  SCANNED
+  IMPORTED
+}
+
+model DuplicateAttempt {
+  id                 String   @id @default(cuid())
+  barcode            String
+  attemptedCompanyId String
+  existingScanId     String
+  attemptedById      String?
+  attemptedAt        DateTime @default(now())
+
+  attemptedCompany Company @relation(fields: [attemptedCompanyId], references: [id])
+  existingScan     Scan    @relation(fields: [existingScanId], references: [id])
+  attemptedBy      User?   @relation(fields: [attemptedById], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  details   Json
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Setting {
+  key   String @id
+  value Json
+}

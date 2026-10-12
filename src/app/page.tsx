@@ -1,350 +1,710 @@
 "use client";
 
 import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getLocalTodayDateString, formatForDisplay, formatFileDate } from '@/lib/date';
 import { playSuccessSound, playErrorSound } from '@/lib/sound';
-import { exportToExcel, importFromExcel } from '@/lib/excel';
-import { DayData, AppSettings, ScanEntry, DuplicateAttempt } from '@/types';
-import { Calendar, Download, Upload, Plus, AlertCircle, FileSpreadsheet, ChevronLeft, ChevronRight, Lock, Unlock } from 'lucide-react';
+import { ScanEntry, AppSettings } from '@/types';
+import { 
+  Calendar, Download, Upload, Plus, AlertCircle, FileSpreadsheet, 
+  ChevronLeft, ChevronRight, Lock, Unlock, Wifi, WifiOff, Loader2,
+  Database, RefreshCw, LogOut, User as UserIcon
+} from 'lucide-react';
 import ExcelSheetView from '@/components/ExcelSheetView';
-import { getSettingsDB, saveSettingsDB, getDayDataDB, saveDayDataDB, migrateLocalStorageToIDB, getAllDatesWithCounts, getBarcodeInLastNDays } from '@/lib/idb';
-import { DEFAULT_HEADERS } from '@/lib/storage';
-import { useSearchParams } from 'next/navigation';
+import LoginView from '@/components/LoginView';
+import { useSearchParams, useRouter } from 'next/navigation';
+
+const DEFAULT_HEADERS = ["Delhivery", "Amazon", "Instamart", "CRED", "Flipkart", "Blinkit"];
 
 function DispatchScannerApp() {
-  const [mounted, setMounted] = useState(false);
+  const queryClient = useQueryClient();
   const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // Auth State
+  const [currentUser, setCurrentUser] = useState<{ username: string; name?: string; role?: string } | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  // Check auth session on load
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(data => {
+        if (data.authenticated && data.user) {
+          setCurrentUser(data.user);
+        } else {
+          setCurrentUser(null);
+        }
+      })
+      .catch(() => setCurrentUser(null))
+      .finally(() => setIsAuthLoading(false));
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+    setCurrentUser(null);
+  };
+  
+  const todayStr = getLocalTodayDateString();
   const urlDate = searchParams?.get('date');
   
-  const [todayStr, setTodayStr] = useState('');
-  const [date, setDate] = useState<string>('');
-  const [isReadOnly, setIsReadOnly] = useState(false);
-  
-  const [settings, setSettings] = useState<AppSettings>({ headers: DEFAULT_HEADERS, activeHeader: DEFAULT_HEADERS[0] });
-  const [dayData, setDayData] = useState<DayData>({ date: '', entries: [], duplicateAttempts: [] });
-  const [savedDates, setSavedDates] = useState<{date: string, count: number}[]>([]);
+  // Initialize date from URL param if present, otherwise today
+  const [date, setDate] = useState<string>(urlDate || todayStr);
+  const [isPastUnlocked, setIsPastUnlocked] = useState(false);
   
   const [inputValue, setInputValue] = useState('');
-  const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error', title: string, text: string } | null>(null);
+  const [activeHeader, setActiveHeader] = useState(DEFAULT_HEADERS[0]);
+  const [newColumnName, setNewColumnName] = useState('');
+  const [showAddColumnModal, setShowAddColumnModal] = useState(false);
+  
+  const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error' | 'warning', title: string, text: string } | null>(null);
   const [recentScanId, setRecentScanId] = useState<string>('');
   const [duplicateFlashId, setDuplicateFlashId] = useState<string>('');
   
-  const [showAddHeader, setShowAddHeader] = useState(false);
-  const [newHeaderName, setNewHeaderName] = useState('');
-  const [showImportModal, setShowImportModal] = useState<{ file: File, headers: string[], entries: any[] } | null>(null);
-  const [showDuplicatesModal, setShowDuplicatesModal] = useState(false);
-  
   const inputRef = useRef<HTMLInputElement>(null);
-  
-  const refocusInput = () => {
-    if (!isReadOnly && document.activeElement?.tagName !== 'INPUT') {
-      if (inputRef.current) inputRef.current.focus();
-    }
-  };
+  const isPastDate = date !== todayStr;
+  const isReadOnly = isPastDate && !isPastUnlocked;
 
-  const loadDateData = async (d: string) => {
-    const data = await getDayDataDB(d);
-    setDayData(data);
-    setDate(d);
-    const today = getLocalTodayDateString();
-    setIsReadOnly(d !== today);
-    const windowUrl = new URL(window.location.href);
-    windowUrl.searchParams.set('date', d);
-    window.history.replaceState({}, '', windowUrl.toString());
-  };
-
-  const refreshDatesList = async () => {
-    const list = await getAllDatesWithCounts();
-    setSavedDates(list);
-  };
-
+  // Sync state if URL changes (e.g. browser back/forward)
   useEffect(() => {
-    async function init() {
-      if (navigator.storage && navigator.storage.persist) {
-        await navigator.storage.persist();
+    if (urlDate && urlDate !== date) {
+      setDate(urlDate);
+    }
+  }, [urlDate]);
+
+  // Clean helper to switch date and keep URL in sync
+  const changeDate = (newDate: string) => {
+    setDate(newDate);
+    setIsPastUnlocked(false);
+    router.replace(`?date=${newDate}`, { scroll: false });
+  };
+
+  // Clean up any legacy IndexedDB database from browser storage
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'indexedDB' in window) {
+      try {
+        window.indexedDB.deleteDatabase('dispatch-scanner-db');
+      } catch (e) {
+        // ignore
       }
-      await migrateLocalStorageToIDB();
-      
-      const s = await getSettingsDB();
-      setSettings(s);
-      
-      const today = getLocalTodayDateString();
-      setTodayStr(today);
-      const initialDate = urlDate || today;
-      await loadDateData(initialDate);
-      await refreshDatesList();
-      
-      setMounted(true);
     }
-    init();
   }, []);
-  
-  useEffect(() => {
-    if (mounted) window.addEventListener('click', refocusInput);
-    return () => window.removeEventListener('click', refocusInput);
-  }, [mounted, isReadOnly]);
-  
-  useEffect(() => {
-    if (mounted) saveSettingsDB(settings);
-  }, [settings, mounted]);
-  
-  useEffect(() => {
-    if (mounted && dayData.date) {
-      saveDayDataDB(dayData).then(() => refreshDatesList());
+
+  // 1. Fetch Companies
+  const { data: companiesData } = useQuery({
+    queryKey: ['companies'],
+    queryFn: async () => {
+      const res = await fetch('/api/companies');
+      if (!res.ok) return DEFAULT_HEADERS.map(name => ({ id: name, name }));
+      return res.json() as Promise<Array<{ id: string; name: string }>>;
+    },
+    staleTime: 60000,
+  });
+
+  const headers = companiesData && companiesData.length > 0 
+    ? companiesData.map(c => c.name) 
+    : DEFAULT_HEADERS;
+
+  // 2. Fetch Dates with scan counts
+  const { data: savedDates = [], refetch: refetchDates } = useQuery({
+    queryKey: ['savedDates'],
+    queryFn: async () => {
+      const res = await fetch('/api/dates');
+      if (!res.ok) return [];
+      return res.json() as Promise<Array<{ date: string; count: number }>>;
+    },
+    staleTime: 5000,
+  });
+
+  // 3. Fetch Scans for active date directly from PostgreSQL
+  const { data: scans = [], isLoading } = useQuery({
+    queryKey: ['scans', date],
+    queryFn: async () => {
+      const res = await fetch(`/api/scans?date=${date}`);
+      if (!res.ok) throw new Error('Network response was not ok');
+      return res.json() as Promise<ScanEntry[]>;
+    },
+    refetchInterval: 3000,
+  });
+
+  // Mutation: Add Scan directly to PostgreSQL
+  const scanMutation = useMutation({
+    mutationFn: async (newScan: { barcode: string; companyId: string; dispatchDate: string }) => {
+      const res = await fetch('/api/scans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newScan),
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(JSON.stringify(errorData));
+      }
+      return res.json();
+    },
+    onMutate: async (newScan) => {
+      await queryClient.cancelQueries({ queryKey: ['scans', date] });
+      const previousScans = queryClient.getQueryData(['scans', date]);
+      
+      const tempId = 'temp-' + Math.random().toString(36).substring(2, 9);
+      queryClient.setQueryData(['scans', date], (old: any) => [
+        ...(old || []),
+        { 
+          id: tempId, 
+          barcode: newScan.barcode, 
+          column: newScan.companyId, 
+          scannedAt: new Date().toISOString(), 
+          source: 'Scanned' 
+        }
+      ]);
+      setRecentScanId(tempId);
+      
+      return { previousScans, tempId };
+    },
+    onError: (err, newScan, context) => {
+      queryClient.setQueryData(['scans', date], context?.previousScans);
+      playErrorSound();
+      try {
+        const parsed = JSON.parse(err.message);
+        if (parsed.error === "DUPLICATE") {
+          const existingCol = parsed.existing?.companyId || parsed.existing?.column || "another column";
+          setStatusMsg({ 
+            type: 'error', 
+            title: 'Duplicate Data', 
+            text: `Barcode ${newScan.barcode} already scanned in ${existingCol}.` 
+          });
+          const existingMatch = scans.find(s => s.barcode.toUpperCase() === newScan.barcode.toUpperCase());
+          if (existingMatch) {
+            setDuplicateFlashId(existingMatch.id);
+            setTimeout(() => setDuplicateFlashId(''), 3000);
+          }
+        } else {
+          setStatusMsg({ type: 'error', title: 'Scan Error', text: parsed.message || 'Failed to save scan.' });
+        }
+      } catch {
+        setStatusMsg({ type: 'error', title: 'Server Error', text: 'Could not connect to database.' });
+      }
+      setTimeout(() => setStatusMsg(null), 4000);
+    },
+    onSuccess: (data, variables) => {
+      playSuccessSound();
+      setStatusMsg({ type: 'success', title: 'Scanned Successfully', text: `${variables.barcode} added to ${variables.companyId}.` });
+      setTimeout(() => setStatusMsg(null), 1500);
+      queryClient.invalidateQueries({ queryKey: ['scans', date] });
+      refetchDates();
+    },
+  });
+
+  // Mutation: Soft / Hard Delete Scan
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/scans?id=${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Failed to delete');
+      return res.json();
+    },
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['scans', date] });
+      const previousScans = queryClient.getQueryData<ScanEntry[]>(['scans', date]);
+      if (previousScans) {
+        queryClient.setQueryData<ScanEntry[]>(['scans', date], old => 
+          (old || []).filter(s => s.id !== id)
+        );
+      }
+      return { previousScans };
+    },
+    onError: (err, _, context) => {
+      if (context?.previousScans) {
+        queryClient.setQueryData(['scans', date], context.previousScans);
+      }
+      playErrorSound();
+      setStatusMsg({ type: 'error', title: 'Delete Error', text: 'Failed to delete scan.' });
+      setTimeout(() => setStatusMsg(null), 3000);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['scans', date] });
+      refetchDates();
+      setStatusMsg({ type: 'success', title: 'Deleted', text: 'Barcode removed from sheet.' });
+      setTimeout(() => setStatusMsg(null), 1500);
+    },
+  });
+
+  // Mutation: Update Scan (Edit Barcode or Column)
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, barcode, companyId }: { id: string; barcode: string; companyId: string }) => {
+      const res = await fetch('/api/scans', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, barcode, companyId }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to update entry');
+      }
+      return res.json();
+    },
+    onMutate: async ({ id, barcode, companyId }) => {
+      await queryClient.cancelQueries({ queryKey: ['scans', date] });
+      const previousScans = queryClient.getQueryData<ScanEntry[]>(['scans', date]);
+      if (previousScans) {
+        queryClient.setQueryData<ScanEntry[]>(['scans', date], old => 
+          (old || []).map(s => s.id === id ? { ...s, barcode, column: companyId || s.column } : s)
+        );
+      }
+      return { previousScans };
+    },
+    onError: (err: any, _, context) => {
+      if (context?.previousScans) {
+        queryClient.setQueryData(['scans', date], context.previousScans);
+      }
+      playErrorSound();
+      setStatusMsg({ type: 'error', title: 'Update Error', text: err.message || 'Failed to update entry.' });
+      setTimeout(() => setStatusMsg(null), 3000);
+    },
+    onSuccess: (data) => {
+      playSuccessSound();
+      queryClient.invalidateQueries({ queryKey: ['scans', date] });
+      refetchDates();
+      setStatusMsg({ type: 'success', title: 'Updated', text: `Scan updated to ${data.scan.barcode} (${data.scan.column}).` });
+      setTimeout(() => setStatusMsg(null), 2000);
+    },
+  });
+
+  // Mutation: Add Custom Company
+  const addCompanyMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await fetch('/api/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) throw new Error('Failed to add company');
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['companies'] });
+      setActiveHeader(data.name);
+      setShowAddColumnModal(false);
+      setNewColumnName('');
+    },
+  });
+
+  const refocusInput = () => {
+    // Always refocus the barcode input unless user is editing in the action bar
+    // (the action bar edit input has a different ref)
+    if (document.activeElement !== inputRef.current) {
+      // Don't steal focus from the ExcelSheetView edit bar inputs
+      const isEditBarInput = document.activeElement?.closest('.excel-sheet-container');
+      if (!isEditBarInput) {
+        setTimeout(() => {
+          if (inputRef.current) inputRef.current.focus();
+        }, 50);
+      }
     }
-  }, [dayData, mounted]);
-  
+  };
+
+  // Keyboard shortcuts and refocus (NEVER steal focus when clicking in sheet or inputs)
   useEffect(() => {
-    if (!showAddHeader && !showImportModal && !showDuplicatesModal) refocusInput();
-  }, [showAddHeader, showImportModal, showDuplicatesModal]);
-  
-  const handleScan = async (e: React.FormEvent) => {
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      // Do NOT steal focus if user clicked inside the sheet, any input, button, select, or modal
+      if (
+        target.closest('.excel-sheet-container') ||
+        target.closest('input') ||
+        target.closest('button') ||
+        target.closest('select') ||
+        target.closest('[role="dialog"]') ||
+        target.closest('.fixed')
+      ) {
+        return;
+      }
+      if (inputRef.current && !isReadOnly && document.activeElement !== inputRef.current) {
+        inputRef.current.focus();
+      }
+    };
+
+    window.addEventListener('click', handleClick);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const num = parseInt(e.key, 10);
+      if (!isNaN(num) && num >= 1 && num <= headers.length) {
+        setActiveHeader(headers[num - 1]);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', handleClick);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [headers, isReadOnly]);
+
+  // Auto-focus safety net: keep barcode input focused ONLY when idle
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!inputRef.current || isReadOnly) return;
+      const activeEl = document.activeElement;
+      if (activeEl && activeEl !== document.body && activeEl !== document.documentElement) {
+        if (
+          activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'SELECT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          activeEl.tagName === 'BUTTON' ||
+          activeEl.closest('.excel-sheet-container') ||
+          activeEl.closest('[role="dialog"]')
+        ) {
+          return;
+        }
+      }
+      inputRef.current.focus();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [isReadOnly]);
+
+  // Handle Scanning Barcode
+  const handleScan = (e: React.FormEvent) => {
     e.preventDefault();
-    if (isReadOnly) return;
     const barcode = inputValue.trim();
     if (!barcode) return;
     
-    if (todayStr !== date) {
-      alert("You are not on today's sheet!");
-      return;
-    }
-    
-    const existingToday = dayData.entries.find(entry => entry.barcode.toLowerCase() === barcode.toLowerCase());
-    if (existingToday) {
+    if (isReadOnly) {
       playErrorSound();
-      const newAttempt: DuplicateAttempt = {
-        id: Math.random().toString(36).substring(2, 9),
-        barcode,
-        attemptedColumn: settings.activeHeader,
-        existingColumn: existingToday.column,
-        existingRow: 0,
-        time: new Date().toISOString()
-      };
-      setDayData(prev => ({ ...prev, duplicateAttempts: [newAttempt, ...prev.duplicateAttempts] }));
-      setDuplicateFlashId(existingToday.id);
-      setTimeout(() => setDuplicateFlashId(''), 2000);
-      setStatusMsg({ type: 'error', title: 'Duplicate Data', text: `Barcode "${barcode}" exists in ${existingToday.column}.` });
-      setInputValue('');
-      setTimeout(() => setStatusMsg(null), 4000);
-      return;
-    }
-
-    const pastDuplicate = await getBarcodeInLastNDays(barcode, 7, todayStr);
-    if (pastDuplicate) {
-      playErrorSound();
-      setStatusMsg({ type: 'error', title: 'Duplicate Data (Past)', text: `Barcode exists in ${pastDuplicate.column} on ${pastDuplicate.date}.` });
-      setInputValue('');
-      setTimeout(() => setStatusMsg(null), 4000);
+      setStatusMsg({ type: 'warning', title: 'Read Only Sheet', text: 'Unlock this past date to make edits or scans.' });
+      setTimeout(() => setStatusMsg(null), 3000);
       return;
     }
     
-    playSuccessSound();
-    const newEntry: ScanEntry = {
-      id: Math.random().toString(36).substring(2, 9),
-      barcode,
-      column: settings.activeHeader,
-      scannedAt: new Date().toISOString(),
-      source: "Scanned"
-    };
-    
-    setDayData(prev => ({ ...prev, entries: [newEntry, ...prev.entries] }));
-    setRecentScanId(newEntry.id);
-    setTimeout(() => setRecentScanId(''), 2000);
-    setStatusMsg({ type: 'success', title: 'Scanned Successfully', text: `${barcode} added.` });
+    scanMutation.mutate({ barcode, companyId: activeHeader, dispatchDate: date });
     setInputValue('');
-    setTimeout(() => setStatusMsg(null), 1500);
-  };
-  
-  const handleExport = async () => {
-    try {
-      const writtenCount = await exportToExcel(dayData, settings);
-      alert(`Exported ${writtenCount} barcodes to Dispatch_${formatFileDate(dayData.date)}.xlsx successfully.`);
-    } catch (e: any) {
-      alert("Export failed: " + e.message);
-    }
   };
 
-  const handleImportSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      try {
-        const { headers, entries } = await importFromExcel(file);
-        setShowImportModal({ file, headers, entries });
-      } catch (err: any) {
-        alert("Failed to import: " + err.message);
-      }
-    }
-    e.target.value = '';
+  // Date shifting
+  const shiftDate = (days: number) => {
+    const current = new Date(date);
+    current.setDate(current.getDate() + days);
+    const newDateStr = current.toISOString().split('T')[0];
+    changeDate(newDateStr);
   };
 
-  const executeImport = (mode: 'replace' | 'merge') => {
-    if (!showImportModal) return;
-    const { headers: importedHeaders, entries } = showImportModal;
-    const newHeaders = [...settings.headers];
-    importedHeaders.forEach(h => {
-      if (!newHeaders.includes(h)) newHeaders.push(h);
-    });
-    setSettings(prev => ({ ...prev, headers: newHeaders }));
-    
-    let skipped = 0, added = 0;
-    setDayData(prev => {
-      const baseEntries = mode === 'replace' ? [] : [...prev.entries];
-      const existingBarcodes = new Set(baseEntries.map(e => e.barcode.toLowerCase()));
-      const newEntries = [...baseEntries];
-      
-      entries.forEach(entry => {
-        if (existingBarcodes.has(entry.barcode.toLowerCase())) skipped++;
-        else { added++; newEntries.push(entry); existingBarcodes.add(entry.barcode.toLowerCase()); }
-      });
-      return { ...prev, entries: newEntries, duplicateAttempts: mode === 'replace' ? [] : prev.duplicateAttempts };
-    });
-    alert(`Loaded ${added} barcodes. ${skipped} duplicates skipped.`);
-    setShowImportModal(null);
-  };
+  // Auth Protection Gate
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white font-sans">
+        <Loader2 className="w-10 h-10 animate-spin text-blue-500 mb-3" />
+        <p className="text-sm font-bold tracking-wide text-slate-300">Verifying session...</p>
+      </div>
+    );
+  }
 
-  const handlePrevDay = () => {
-    const d = new Date(date);
-    d.setDate(d.getDate() - 1);
-    loadDateData(d.toISOString().split('T')[0]);
-  };
-  
-  const handleNextDay = () => {
-    const d = new Date(date);
-    d.setDate(d.getDate() + 1);
-    loadDateData(d.toISOString().split('T')[0]);
-  };
+  if (!currentUser) {
+    return <LoginView onLoginSuccess={(user) => setCurrentUser(user)} />;
+  }
 
-  if (!mounted) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  // Grand Total & Company Counts
+  const totalScans = scans.length;
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans" onDragOver={(e) => e.preventDefault()} onDrop={(e) => e.preventDefault()}>
-      <header className="bg-slate-900 text-white p-4 flex flex-wrap gap-4 items-center justify-between shadow-md z-10 shrink-0">
-        <div className="flex items-center space-x-4">
-          <h1 className="text-xl font-bold tracking-wider">DISPATCH SCANNER</h1>
-          <div className="flex items-center space-x-2 bg-slate-800 px-3 py-1 rounded-md">
-            <button onClick={handlePrevDay} className="hover:text-blue-400 p-1"><ChevronLeft className="w-4 h-4"/></button>
-            <input type="date" className="bg-transparent text-sm font-medium border-none outline-none text-white cursor-pointer [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" value={date} onChange={(e) => loadDateData(e.target.value)} />
-            <button onClick={handleNextDay} className="hover:text-blue-400 p-1"><ChevronRight className="w-4 h-4"/></button>
-            <button onClick={() => loadDateData(todayStr)} className="ml-2 px-2 py-1 bg-slate-700 text-xs rounded hover:bg-slate-600">Today</button>
+    <div className="min-h-screen bg-slate-100 flex flex-col font-sans select-none">
+      {/* Top Header Bar */}
+      <header className="bg-slate-900 text-white px-6 py-3 flex flex-wrap gap-4 items-center justify-between shadow-lg z-10 shrink-0">
+        <div className="flex items-center space-x-6">
+          <div className="flex items-center space-x-2">
+            <FileSpreadsheet className="w-6 h-6 text-blue-400" />
+            <h1 className="text-xl font-black tracking-wider text-white">DISPATCH SCANNER</h1>
           </div>
-          
-          <select 
-            className="bg-slate-800 text-sm text-white px-3 py-2 rounded-md outline-none"
-            value={date}
-            onChange={(e) => loadDateData(e.target.value)}
-          >
-            <option value="" disabled>Saved dates...</option>
-            {savedDates.map(sd => (
-              <option key={sd.date} value={sd.date}>{sd.date} — {sd.count} scans</option>
-            ))}
-          </select>
+
+          {/* Quick Date Controls */}
+          <div className="flex items-center space-x-2 bg-slate-800 p-1.5 rounded-lg border border-slate-700">
+            <button 
+              onClick={() => changeDate(todayStr)}
+              className={`px-2.5 py-1 text-xs font-bold rounded transition-colors ${date === todayStr ? 'bg-blue-600 text-white' : 'text-slate-300 hover:text-white'}`}
+            >
+              Today
+            </button>
+            <button 
+              onClick={() => {
+                const y = new Date();
+                y.setDate(y.getDate() - 1);
+                changeDate(y.toISOString().split('T')[0]);
+              }}
+              className="px-2.5 py-1 text-xs font-bold rounded text-slate-300 hover:text-white"
+            >
+              Yesterday
+            </button>
+            <button onClick={() => shiftDate(-1)} title="Previous Day" className="p-1 hover:bg-slate-700 rounded text-slate-300">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <input 
+              type="date" 
+              className="bg-slate-900 text-white text-xs font-semibold px-2 py-1 rounded border border-slate-700 outline-none cursor-pointer [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" 
+              value={date} 
+              onChange={(e) => { if (e.target.value) changeDate(e.target.value); }} 
+            />
+            <button onClick={() => shiftDate(1)} title="Next Day" className="p-1 hover:bg-slate-700 rounded text-slate-300">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+
+            {/* Saved Dates Dropdown */}
+            {savedDates.length > 0 && (
+              <select 
+                value={savedDates.some(d => d.date === date) ? date : ""} 
+                onChange={(e) => { if (e.target.value) changeDate(e.target.value); }}
+                className="bg-slate-900 text-slate-300 text-xs px-2 py-1 rounded border border-slate-700 outline-none cursor-pointer"
+              >
+                <option value="">Saved dates...</option>
+                {savedDates.map(d => (
+                  <option key={d.date} value={d.date}>
+                    {formatFileDate(d.date)} ({d.count} scans)
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
+
+        {/* Right Header Controls: Database Status, Export, Backup, User info & Logout */}
         <div className="flex items-center space-x-3">
-          <button onClick={() => setShowDuplicatesModal(true)} className={`px-3 py-2 rounded-md text-sm font-semibold flex items-center space-x-2 transition-colors ${dayData.duplicateAttempts.length > 0 ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-800 text-slate-400'}`}>
-            <AlertCircle className="w-4 h-4" /><span>Duplicates ({dayData.duplicateAttempts.length})</span>
-          </button>
-          <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-md text-sm font-semibold flex items-center space-x-2">
-            <Upload className="w-4 h-4" /><span>Open Excel</span>
-            <input type="file" accept=".xlsx" className="hidden" onChange={handleImportSelect} />
-          </label>
-          <button onClick={handleExport} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-md text-sm font-semibold flex items-center space-x-2 shadow-sm shadow-green-900/20">
-            <Download className="w-4 h-4" /><span>Export</span>
-          </button>
+          {/* PostgreSQL DB status */}
+          <div 
+            title="Connected to PostgreSQL database"
+            className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center space-x-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>PostgreSQL</span>
+          </div>
+
+          {/* Export Excel Button */}
+          <a 
+            href={`/api/export?date=${date}`} 
+            download
+            className="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export Excel</span>
+          </a>
+
+          {/* Database Backup Button */}
+          <a 
+            href="/api/backup" 
+            download
+            className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow transition-colors"
+          >
+            <Database className="w-3.5 h-3.5" />
+            <span>Backup DB</span>
+          </a>
+
+          {/* User info & Logout */}
+          <div className="flex items-center space-x-2 pl-2 border-l border-slate-700">
+            <div className="flex items-center space-x-1.5 text-xs text-slate-300 font-semibold bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700">
+              <UserIcon className="w-3.5 h-3.5 text-blue-400" />
+              <span className="truncate max-w-[140px]">{currentUser.username}</span>
+            </div>
+            <button 
+              onClick={handleLogout}
+              title="Sign Out"
+              className="flex items-center space-x-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          </div>
         </div>
       </header>
 
-      {isReadOnly && (
-        <div className="bg-yellow-100 text-yellow-800 px-6 py-2 flex justify-between items-center text-sm font-semibold shadow-sm">
+      {/* Read-Only Warning Banner */}
+      {isPastDate && (
+        <div className={`px-6 py-2.5 flex items-center justify-between text-sm font-semibold transition-colors ${
+          isReadOnly ? 'bg-amber-100 text-amber-900 border-b border-amber-200' : 'bg-blue-100 text-blue-900 border-b border-blue-200'
+        }`}>
           <div className="flex items-center space-x-2">
-            <Lock className="w-4 h-4" />
-            <span>Viewing {formatFileDate(date)} (read-only). Go to Today to scan.</span>
+            {isReadOnly ? <Lock className="w-4 h-4 text-amber-700" /> : <Unlock className="w-4 h-4 text-blue-700" />}
+            <span>
+              {isReadOnly 
+                ? `Viewing past sheet for ${formatFileDate(date)} (Read-Only Mode)` 
+                : `Editing past sheet for ${formatFileDate(date)} (Unlocked)`}
+            </span>
           </div>
-          <div className="flex space-x-3">
-            <button onClick={() => { if(confirm("Enable edits for this past date?")) setIsReadOnly(false); }} className="text-yellow-900 underline">Enable editing</button>
-            <button onClick={() => loadDateData(todayStr)} className="bg-yellow-800 text-yellow-100 px-3 py-1 rounded">Back to Today</button>
-          </div>
+          <button 
+            onClick={() => setIsPastUnlocked(!isPastUnlocked)}
+            className={`px-3 py-1 rounded text-xs font-bold transition-colors ${
+              isReadOnly ? 'bg-amber-800 text-white hover:bg-amber-900' : 'bg-blue-800 text-white hover:bg-blue-900'
+            }`}
+          >
+            {isReadOnly ? 'Unlock to Edit' : 'Lock Sheet'}
+          </button>
         </div>
       )}
 
-      <main className="flex-1 p-6 flex flex-col gap-6 w-full max-w-full overflow-hidden">
-        <div className="flex flex-col xl:flex-row gap-6 shrink-0">
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 xl:w-2/3 flex flex-col">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-4">
-                <div className="bg-blue-50 text-blue-800 px-4 py-2 rounded-lg border border-blue-200">
-                  <span className="text-xs uppercase font-bold text-blue-500 block">Totals for {formatFileDate(date)}</span>
-                  <span className="text-xl font-bold">Total Scanned: {dayData.entries.length}</span>
-                </div>
-                <div className="bg-orange-50 text-orange-800 px-4 py-2 rounded-lg border border-orange-200">
-                   <span className="text-xs uppercase font-bold text-orange-500 block">Duplicates Blocked</span>
-                   <span className="text-xl font-bold">{dayData.duplicateAttempts.length}</span>
-                </div>
+      {/* Main Container */}
+      <main className="flex-1 p-5 flex flex-col gap-4 overflow-hidden">
+        {/* Controls Row: Column Tabs & Scanner Input */}
+        <div className="flex flex-col lg:flex-row gap-4 shrink-0">
+          {/* Column Picker */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:w-2/3 flex flex-col justify-between">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold tracking-wider text-slate-500 uppercase">SELECT COLUMN (Keys 1-{headers.length})</span>
+                <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
+                  Total: {totalScans}
+                </span>
               </div>
-              <button onClick={() => setShowAddHeader(true)} className="text-blue-600 hover:bg-blue-50 px-2 py-1 text-sm font-semibold rounded flex items-center">
-                <Plus className="w-4 h-4 mr-1" /> Add Header
+              <button 
+                onClick={() => setShowAddColumnModal(true)}
+                className="flex items-center space-x-1 text-xs font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Column</span>
               </button>
             </div>
-            <div className="flex gap-3 overflow-x-auto pb-2 flex-wrap">
-              {settings.headers.map((header, idx) => {
-                const isActive = settings.activeHeader === header;
-                const count = dayData.entries.filter(e => e.column === header).length;
+
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5">
+              {headers.map((header, idx) => {
+                const isActive = activeHeader === header;
+                const count = scans.filter(e => e.column === header).length;
                 return (
-                  <button key={header} onClick={() => setSettings(s => ({ ...s, activeHeader: header }))} className={`relative px-4 py-3 rounded-lg border-2 text-left transition-all min-w-[140px] flex-1 ${isActive ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-100 bg-slate-50 hover:bg-slate-100'}`}>
-                    <div className="font-bold mb-1 text-slate-700">{header}</div>
-                    <div className="text-sm font-semibold text-slate-500">{count} items</div>
-                    {idx < 9 && <div className="absolute top-2 right-2 w-5 h-5 bg-slate-200 text-slate-500 text-[10px] rounded flex items-center justify-center font-bold">{idx + 1}</div>}
+                  <button 
+                    key={header} 
+                    onClick={() => { setActiveHeader(header); setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 100); }} 
+                    className={`relative p-3 rounded-lg border-2 text-left transition-all ${
+                      isActive 
+                        ? 'border-blue-600 bg-blue-50/80 shadow-md ring-2 ring-blue-500/20' 
+                        : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11px] font-bold text-slate-400">#{idx + 1}</span>
+                      <span className={`text-xs font-extrabold px-1.5 py-0.2 rounded-full ${
+                        isActive ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {count}
+                      </span>
+                    </div>
+                    <div className="font-bold text-sm text-slate-800 truncate" title={header}>
+                      {header}
+                    </div>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 xl:w-1/3 flex flex-col justify-center">
-            <form onSubmit={handleScan} className="relative">
-              <input ref={inputRef} disabled={isReadOnly} type="text" className="w-full text-3xl font-mono p-4 border-2 border-slate-300 rounded-lg focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none disabled:bg-slate-100 disabled:text-slate-400" placeholder={isReadOnly ? "Read Only Mode" : "Scan barcode..."} value={inputValue} onChange={(e) => setInputValue(e.target.value)} autoFocus />
-            </form>
-            <div className="mt-4 h-16">
-              {statusMsg && (
-                <div className={`p-3 rounded-lg flex items-start space-x-3 h-full overflow-hidden ${statusMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800 border-2 border-red-200'}`}>
-                  <div><h3 className="font-bold text-sm leading-tight">{statusMsg.title}</h3><p className="text-xs mt-0.5 truncate">{statusMsg.text}</p></div>
+          {/* Big Barcode Scan Box & Feedback Banner */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:w-1/3 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold tracking-wider text-slate-500 uppercase">
+                  ACTIVE: <span className="text-blue-600 font-extrabold">{activeHeader}</span>
+                </span>
+                <span className="text-[11px] text-slate-400 font-medium">Press Enter to scan</span>
+              </div>
+              <form onSubmit={handleScan}>
+                <input 
+                  ref={inputRef} 
+                  type="text" 
+                  disabled={isReadOnly}
+                  className={`w-full text-2xl font-mono px-4 py-3 border-2 rounded-xl outline-none transition-all ${
+                    isReadOnly 
+                      ? 'bg-slate-100 border-slate-300 cursor-not-allowed text-slate-400' 
+                      : 'border-blue-500 focus:border-blue-600 focus:ring-4 focus:ring-blue-100 text-slate-900 bg-white'
+                  }`}
+                  placeholder={isReadOnly ? "Sheet is locked..." : "Scan or type barcode..."} 
+                  value={inputValue} 
+                  onChange={(e) => setInputValue(e.target.value)} 
+                  autoFocus 
+                />
+              </form>
+            </div>
+
+            {/* Notification / Sound Alert Banner */}
+            <div className="mt-2 min-h-[50px] flex items-center">
+              {statusMsg ? (
+                <div className={`w-full p-2.5 rounded-lg flex items-center space-x-2.5 text-xs font-bold transition-all shadow-sm ${
+                  statusMsg.type === 'success' 
+                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
+                    : statusMsg.type === 'error'
+                    ? 'bg-red-100 text-red-900 border-2 border-red-400 animate-pulse'
+                    : 'bg-amber-100 text-amber-900 border border-amber-300'
+                }`}>
+                  <AlertCircle className={`w-4 h-4 shrink-0 ${statusMsg.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`} />
+                  <div className="truncate">
+                    <span className="font-black mr-1">{statusMsg.title}:</span>
+                    <span>{statusMsg.text}</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-slate-400 text-xs font-medium italic">
+                  Auto-focus active. Barcode scanner ready.
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {dayData.entries.length === 0 ? (
-           <div className="flex-1 flex items-center justify-center bg-white border border-slate-300 rounded-lg shadow-sm">
-             <div className="text-center text-slate-500">
-               <FileSpreadsheet className="w-16 h-16 mx-auto text-slate-300 mb-4" />
-               <p className="font-bold text-lg">No scans on {formatFileDate(date)}</p>
-             </div>
-           </div>
-        ) : (
-          <ExcelSheetView 
-            date={formatFileDate(date)}
-            entries={dayData.entries}
-            settings={settings}
-            recentScanId={recentScanId}
-            duplicateFlashId={duplicateFlashId}
-            onDelete={(id) => !isReadOnly && setDayData(prev => ({ ...prev, entries: prev.entries.filter(e => e.id !== id) }))}
-            onRefocusInput={refocusInput}
-          />
-        )}
-      </main>
-      
-      {showImportModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-            <h3 className="text-lg font-bold text-slate-800 mb-6">How would you like to process this file?</h3>
-            <div className="space-y-3">
-              <button onClick={() => executeImport('replace')} className="w-full text-left p-4 rounded-lg border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50">
-                <div className="font-bold text-slate-800">Continue this file</div>
-              </button>
-              <button onClick={() => executeImport('merge')} className="w-full text-left p-4 rounded-lg border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50">
-                <div className="font-bold text-slate-800">Merge into today</div>
-              </button>
+        {/* Live Excel Sheet View */}
+        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-300 overflow-hidden flex flex-col">
+          {isLoading ? (
+            <div className="flex-1 flex flex-col items-center justify-center">
+              <Loader2 className="w-10 h-10 animate-spin text-blue-500 mb-2" />
+              <p className="text-sm font-bold text-slate-500">Loading dispatch sheet...</p>
             </div>
+          ) : (
+            <ExcelSheetView 
+              date={formatFileDate(date)}
+              entries={scans}
+              settings={{ headers, activeHeader }}
+              recentScanId={recentScanId}
+              duplicateFlashId={duplicateFlashId}
+              onDelete={(id) => deleteMutation.mutate(id)}
+              onUpdate={(id, newBarcode, newCompany) => updateMutation.mutate({ id, barcode: newBarcode, companyId: newCompany })}
+              onRefocusInput={refocusInput}
+              isReadOnly={isReadOnly}
+              onUnlock={() => setIsPastUnlocked(true)}
+            />
+          )}
+        </div>
+      </main>
+
+      {/* Add Custom Column Modal */}
+      {showAddColumnModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full p-6">
+            <h2 className="text-lg font-bold text-slate-800 mb-3">Add Custom Company Column</h2>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              if (newColumnName.trim()) {
+                addCompanyMutation.mutate(newColumnName.trim());
+              }
+            }}>
+              <input 
+                type="text"
+                placeholder="Company Name (e.g. DTDC, Ecom)"
+                className="w-full text-base p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+                value={newColumnName}
+                onChange={(e) => setNewColumnName(e.target.value)}
+                autoFocus
+              />
+              <div className="flex justify-end space-x-2">
+                <button 
+                  type="button" 
+                  onClick={() => setShowAddColumnModal(false)}
+                  className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={!newColumnName.trim()}
+                  className="px-4 py-2 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 rounded-lg"
+                >
+                  Add Column
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -354,7 +714,7 @@ function DispatchScannerApp() {
 
 export default function App() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<div className="min-h-screen bg-slate-900 flex items-center justify-center text-white font-bold">Loading Dispatch Scanner...</div>}>
       <DispatchScannerApp />
     </Suspense>
   );
