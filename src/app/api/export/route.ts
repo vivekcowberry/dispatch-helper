@@ -72,23 +72,6 @@ export async function GET(req: Request) {
     let currentRowIdx = 2; // start after header
     let sheetIndex = 0;
 
-    sheet1.getRow(1).values = headers;
-    const headerRow = sheet1.getRow(1);
-    headerRow.font = { bold: true };
-    headerRow.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFEEEEEE' },
-    };
-    headerRow.eachCell((cell) => {
-      cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        bottom: { style: 'thin' },
-        right: { style: 'thin' },
-      };
-    });
-
     const columnsWidths: number[] = headers.map(() => 18);
     const columnData: Record<string, string[]> = {};
     headers.forEach(h => columnData[h] = []);
