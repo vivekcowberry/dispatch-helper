@@ -4,6 +4,7 @@ export type ScanEntry = {
   column: string;
   scannedAt: string; // ISO
   source: "Scanned" | "Imported";
+  status?: "DISPATCHED" | "CANCELLED" | "RTO" | string;
 };
 
 export type DuplicateAttempt = {
@@ -11,8 +12,9 @@ export type DuplicateAttempt = {
   barcode: string;
   attemptedColumn: string;
   existingColumn: string;
-  existingRow: number;
+  existingRow?: number;
   time: string; // ISO
+  status?: "CANCELLED" | "RTO" | string;
 };
 
 export type DayData = {

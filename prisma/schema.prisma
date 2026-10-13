@@ -49,6 +49,7 @@ model Scan {
   scannedAt         DateTime  @db.Timestamptz
   scannedById       String?
   source            Source    @default(SCANNED)
+  status            String?   @default("DISPATCHED") // DISPATCHED, CANCELLED, RTO
   deletedAt         DateTime?
   deletedById       String?
   deleteReason      String?
@@ -74,6 +75,7 @@ model DuplicateAttempt {
   barcode            String
   attemptedCompanyId String
   existingScanId     String
+  status             String?  // CANCELLED, RTO
   attemptedById      String?
   attemptedAt        DateTime @default(now())
 

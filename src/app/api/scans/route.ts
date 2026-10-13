@@ -64,7 +64,7 @@ export async function POST(req: Request) {
         
         if (daysDiff < checkDays) {
           // Log duplicate attempt
-          await tx.duplicateAttempt.create({
+          const dup = await tx.duplicateAttempt.create({
             data: {
               barcode,
               attemptedCompanyId: company.id,
@@ -74,11 +74,15 @@ export async function POST(req: Request) {
           
           return {
             error: "DUPLICATE",
+            duplicateAttemptId: dup.id,
             existing: {
+              id: existingScan.id,
+              barcode: existingScan.barcode,
               companyId: existingScan.company.name,
               column: existingScan.company.name,
               dispatchDate: existingScan.dispatchDate,
               scannedAt: existingScan.scannedAt,
+              status: existingScan.status || "DISPATCHED",
             }
           };
         }
@@ -93,7 +97,8 @@ export async function POST(req: Request) {
             companyId: company.id,
             dispatchDate,
             scannedAt: new Date(),
-            source: "SCANNED"
+            source: "SCANNED",
+            status: "DISPATCHED",
           },
           include: {
             company: true
@@ -107,7 +112,8 @@ export async function POST(req: Request) {
             barcode: newScan.barcode,
             column: newScan.company.name,
             scannedAt: newScan.scannedAt.toISOString(),
-            source: "Scanned"
+            source: "Scanned",
+            status: newScan.status || "DISPATCHED",
           }
         };
       } catch (e) {
@@ -153,6 +159,7 @@ export async function GET(req: Request) {
       column: s.company.name,
       scannedAt: s.scannedAt.toISOString(),
       source: s.source === "SCANNED" ? "Scanned" : "Imported",
+      status: s.status || "DISPATCHED",
     }));
 
     return NextResponse.json(formatted);
@@ -187,6 +194,8 @@ const updateScanSchema = z.object({
   id: z.string(),
   barcode: z.string().min(1).max(100).transform(val => val.replace(/[\x00-\x1F\x7F]/g, "")).optional(),
   companyId: z.string().optional(),
+  status: z.enum(["DISPATCHED", "CANCELLED", "RTO"]).optional(),
+  duplicateAttemptId: z.string().optional(),
 });
 
 export async function PATCH(req: Request) {
@@ -197,7 +206,7 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: "VALIDATION_ERROR", details: parsed.error.format() }, { status: 400 });
     }
 
-    const { id, barcode, companyId } = parsed.data;
+    const { id, barcode, companyId, status, duplicateAttemptId } = parsed.data;
     const scan = await prisma.scan.findUnique({ where: { id } });
     if (!scan) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
 
@@ -233,11 +242,24 @@ export async function PATCH(req: Request) {
       updateData.companyId = company.id;
     }
 
+    if (status) {
+      updateData.status = status;
+    }
+
+    // Update scan
     const updated = await prisma.scan.update({
       where: { id },
       data: updateData,
       include: { company: true },
     });
+
+    // If duplicateAttemptId provided, update that too
+    if (duplicateAttemptId && status) {
+      await prisma.duplicateAttempt.update({
+        where: { id: duplicateAttemptId },
+        data: { status },
+      }).catch(() => {});
+    }
 
     return NextResponse.json({
       success: true,
@@ -247,6 +269,7 @@ export async function PATCH(req: Request) {
         column: updated.company.name,
         scannedAt: updated.scannedAt.toISOString(),
         source: updated.source === "SCANNED" ? "Scanned" : "Imported",
+        status: updated.status || "DISPATCHED",
       },
     });
   } catch (err: any) {

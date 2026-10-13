@@ -41,10 +41,36 @@ export async function GET(req: Request) {
     const workbook = new ExcelJS.Workbook();
     const dateFormatted = date.split('-').reverse().join('-');
 
-    // Sheet 1: Main Dispatch Grid
-    const sheet1 = workbook.addWorksheet(`Dispatch ${dateFormatted}`, {
-      views: [{ state: 'frozen', ySplit: 1 }],
-    });
+    // Configuration: max rows per Dispatch sheet before paging
+    const MAX_ROWS_PER_SHEET = 30; // adjust as needed
+
+    // Helper to create a Dispatch worksheet with headers
+    const createDispatchSheet = (index: number) => {
+      const name = index === 0 ? `Dispatch ${dateFormatted}` : `Dispatch ${dateFormatted} - Part ${index + 1}`;
+      const sheet = workbook.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 1 }] });
+      sheet.getRow(1).values = headers;
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true };
+      headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFEEEEEE' },
+      };
+      headerRow.eachCell((cell) => {
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' },
+        };
+      });
+      return sheet;
+    };
+
+    // Initialize first Dispatch sheet
+    let currentSheet = createDispatchSheet(0);
+    let currentRowIdx = 2; // start after header
+    let sheetIndex = 0;
 
     sheet1.getRow(1).values = headers;
     const headerRow = sheet1.getRow(1);
@@ -77,7 +103,13 @@ export async function GET(req: Request) {
     const maxRows = Math.max(...headers.map(h => columnData[h].length), 0);
 
     for (let i = 0; i < maxRows; i++) {
-      const row = sheet1.getRow(i + 2);
+      // If the current sheet exceeds the max rows, start a new sheet
+      if (currentRowIdx > MAX_ROWS_PER_SHEET + 1) {
+        sheetIndex++;
+        currentSheet = createDispatchSheet(sheetIndex);
+        currentRowIdx = 2; // reset for new sheet (header is row 1)
+      }
+      const row = currentSheet.getRow(currentRowIdx);
       headers.forEach((h, colIndex) => {
         const val = columnData[h][i];
         if (val) {
@@ -87,9 +119,15 @@ export async function GET(req: Request) {
           columnsWidths[colIndex] = Math.max(columnsWidths[colIndex], val.length + 2);
         }
       });
+      currentRowIdx++;
     }
 
-    sheet1.columns = columnsWidths.map(w => ({ width: w }));
+    // Apply column widths to all Dispatch sheets created
+    workbook.eachSheet((sheet) => {
+      if (sheet.name.startsWith('Dispatch')) {
+        sheet.columns = columnsWidths.map(w => ({ width: w }));
+      }
+    });
 
     // Sheet 2: Summary
     const sheet2 = workbook.addWorksheet('Summary');
@@ -107,7 +145,7 @@ export async function GET(req: Request) {
 
     // Sheet 3: Scan Log
     const sheet3 = workbook.addWorksheet('Scan Log');
-    sheet3.getRow(1).values = ['S.No', 'Barcode', 'Company', 'Date', 'Time', 'Source'];
+    sheet3.getRow(1).values = ['S.No', 'Barcode', 'Company', 'Date', 'Time', 'Source', 'Status'];
     sheet3.getRow(1).font = { bold: true };
     scans.forEach((s, i) => {
       const d = new Date(s.scannedAt);
@@ -118,27 +156,29 @@ export async function GET(req: Request) {
         d.toLocaleDateString(),
         d.toLocaleTimeString(),
         s.source,
+        s.status || "DISPATCHED",
       ];
       sheet3.getRow(i + 2).getCell(2).numFmt = '@';
     });
-    sheet3.columns = [{ width: 10 }, { width: 25 }, { width: 20 }, { width: 15 }, { width: 15 }, { width: 15 }];
+    sheet3.columns = [{ width: 10 }, { width: 25 }, { width: 20 }, { width: 15 }, { width: 15 }, { width: 15 }, { width: 18 }];
 
     // Sheet 4: Duplicate Attempts
     if (duplicates.length > 0) {
       const sheet4 = workbook.addWorksheet('Duplicate Attempts');
-      sheet4.getRow(1).values = ['S.No', 'Barcode', 'Attempted Company', 'Existing Company', 'Time'];
+      sheet4.getRow(1).values = ['S.No', 'Barcode', 'Attempted Company', 'Existing Company', 'Time', 'Status'];
       sheet4.getRow(1).font = { bold: true };
       duplicates.forEach((d, i) => {
         sheet4.getRow(i + 2).values = [
           i + 1,
           d.barcode,
           d.attemptedCompany.name,
-          d.existingScan.company.name,
+          d.existingScan?.company?.name || "Unknown",
           new Date(d.attemptedAt).toLocaleTimeString(),
+          d.status || "DETECTED",
         ];
         sheet4.getRow(i + 2).getCell(2).numFmt = '@';
       });
-      sheet4.columns = [{ width: 10 }, { width: 25 }, { width: 20 }, { width: 20 }, { width: 15 }];
+      sheet4.columns = [{ width: 10 }, { width: 25 }, { width: 20 }, { width: 20 }, { width: 15 }, { width: 18 }];
     }
 
     const buffer = await workbook.xlsx.writeBuffer();

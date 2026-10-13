@@ -495,7 +495,7 @@ export default function LoginView({ onLoginSuccess }: Props) {
                 <div>
                   <h3 className="text-base font-bold text-white">Password Changed Successfully!</h3>
                   <p className="text-xs text-slate-400 mt-1">
-                    Your password has been updated in PostgreSQL. You can now log in with your new password.
+                    Your password has been updated . You can now log in with your new password.
                   </p>
                 </div>
                 <button
