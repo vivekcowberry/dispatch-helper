@@ -1,7 +1,8 @@
 "use client";
 
 import React from 'react';
-import { AlertTriangle, Ban, RotateCcw, X, Clock, Building, Calendar, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, Ban, RotateCcw, X, Calendar, Building, FileSpreadsheet, MapPin, Download } from 'lucide-react';
+import { formatFileDate } from '@/lib/date';
 
 export interface DuplicateModalData {
   barcode: string;
@@ -11,25 +12,31 @@ export interface DuplicateModalData {
   existingDate: string;
   existingScannedAt?: string;
   duplicateAttemptId?: string;
+  excelFileName?: string;
+  sheetName?: string;
+  cellAddress?: string;
+  gridRow?: number;
 }
 
 interface Props {
   data: DuplicateModalData | null;
   onClose: () => void;
-  onMarkStatus: (status: 'CANCELLED' | 'RTO') => void;
+  onMarkStatus: (status: 'RTS' | 'CANCELLED') => void;
   isLoading?: boolean;
 }
 
 export default function DuplicateModal({ data, onClose, onMarkStatus, isLoading }: Props) {
   if (!data) return null;
 
+  const displayDate = formatFileDate(data.existingDate);
+
   return (
     <div 
-      className="fixed inset-0 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 select-none font-sans"
+      className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 select-none font-sans"
       onClick={onClose}
     >
       <div 
-        className="bg-slate-900 border-2 border-amber-500/60 max-w-lg w-full rounded-2xl shadow-2xl overflow-hidden relative"
+        className="bg-slate-900 border-2 border-amber-500/70 max-w-lg w-full rounded-2xl shadow-2xl overflow-hidden relative text-white"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header Ribbon */}
@@ -39,8 +46,8 @@ export default function DuplicateModal({ data, onClose, onMarkStatus, isLoading 
               <AlertTriangle className="w-6 h-6 animate-pulse" />
             </div>
             <div>
-              <h2 className="text-lg font-black text-white tracking-wide">DUPLICATE ENTRY DETECTED</h2>
-              <p className="text-xs text-amber-300 font-semibold">This barcode was already scanned earlier</p>
+              <h2 className="text-lg font-black text-white tracking-wide">Duplicate Barcode Found</h2>
+              <p className="text-xs text-amber-300 font-medium">Navigated to historical record</p>
             </div>
           </div>
           <button 
@@ -53,10 +60,15 @@ export default function DuplicateModal({ data, onClose, onMarkStatus, isLoading 
         </div>
 
         {/* Content Body */}
-        <div className="p-6 space-y-5">
+        <div className="p-6 space-y-4">
+          {/* Main User Message */}
+          <div className="text-sm font-semibold text-slate-200 bg-slate-950/70 border border-slate-800 rounded-xl p-3.5 text-center">
+            This barcode already exists in the database. Please select the appropriate action.
+          </div>
+
           {/* Barcode Display */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-center">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest block mb-1">
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-center">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
               SCANNED BARCODE
             </span>
             <span className="text-2xl font-black font-mono text-amber-400 tracking-wider">
@@ -64,56 +76,85 @@ export default function DuplicateModal({ data, onClose, onMarkStatus, isLoading 
             </span>
           </div>
 
-          {/* Conflict Details Grid */}
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-3">
-              <span className="text-slate-400 font-bold block mb-1">CURRENT ATTEMPT</span>
-              <div className="flex items-center space-x-1.5 text-amber-300 font-bold text-sm">
-                <Building className="w-4 h-4 shrink-0" />
-                <span>{data.attemptedCompany}</span>
+          {/* Excel Navigation / Cell Location Details */}
+          <div className="bg-slate-800/90 border border-slate-700 rounded-xl p-4 space-y-2.5 text-xs">
+            <div className="text-[11px] font-black uppercase text-blue-400 tracking-wider flex items-center justify-between">
+              <span>Original Excel Record Location</span>
+              {data.cellAddress && (
+                <span className="bg-blue-600 text-white font-mono px-2 py-0.5 rounded text-[11px] font-bold shadow-xs">
+                  Cell: {data.cellAddress}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-slate-300">
+              <div className="flex items-center space-x-1.5 bg-slate-900/60 p-2 rounded-lg border border-slate-800">
+                <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+                <div>
+                  <span className="text-[10px] text-slate-400 block font-semibold">Scan Date</span>
+                  <strong className="text-white text-xs">{displayDate}</strong>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-1.5 bg-slate-900/60 p-2 rounded-lg border border-slate-800">
+                <Building className="w-4 h-4 text-slate-400 shrink-0" />
+                <div>
+                  <span className="text-[10px] text-slate-400 block font-semibold">Company / Column</span>
+                  <strong className="text-white text-xs">{data.existingCompany}</strong>
+                </div>
               </div>
             </div>
 
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-3">
-              <span className="text-slate-400 font-bold block mb-1">ORIGINAL SCAN</span>
-              <div className="flex items-center space-x-1.5 text-blue-400 font-bold text-sm">
-                <Building className="w-4 h-4 shrink-0" />
-                <span>{data.existingCompany}</span>
+            {data.excelFileName && (
+              <div className="bg-slate-900/60 p-2.5 rounded-lg border border-slate-800 flex items-center justify-between">
+                <div className="flex items-center space-x-2 truncate">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <div className="truncate">
+                    <span className="text-slate-200 font-bold block truncate">{data.excelFileName}</span>
+                    <span className="text-[11px] text-slate-400">Sheet: {data.sheetName || 'Dispatch'}</span>
+                  </div>
+                </div>
+
+                <a
+                  href={`/api/export?date=${data.existingDate}`}
+                  download
+                  title="Download historical Excel file"
+                  className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 rounded text-[11px] font-bold transition-colors shrink-0 ml-2"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>Download .xlsx</span>
+                </a>
               </div>
-              <div className="flex items-center space-x-1 text-slate-400 text-[11px] mt-1 font-medium">
-                <Calendar className="w-3 h-3" />
-                <span>Date: {data.existingDate}</span>
-              </div>
-            </div>
+            )}
           </div>
 
-          <div className="text-xs text-slate-300 bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-center">
-            How would you like to handle this duplicate scan? Choose an action below:
-          </div>
-
-          {/* Action Buttons */}
+          {/* Action Buttons: RTS and Cancelled */}
           <div className="grid grid-cols-2 gap-3 pt-1">
+            {/* RTS Button */}
             <button
-              onClick={() => onMarkStatus('CANCELLED')}
+              type="button"
+              onClick={() => onMarkStatus('RTS')}
               disabled={isLoading}
-              className="flex items-center justify-center space-x-2 bg-red-600 hover:bg-red-500 active:bg-red-700 text-white font-extrabold py-3 px-4 rounded-xl shadow-lg shadow-red-600/30 transition-all cursor-pointer disabled:opacity-50"
-            >
-              <Ban className="w-5 h-5 shrink-0" />
-              <div className="text-left">
-                <div className="text-xs tracking-wider uppercase font-black">MARK CANCELLED</div>
-                <div className="text-[10px] text-red-200 font-normal">Order cancelled by user</div>
-              </div>
-            </button>
-
-            <button
-              onClick={() => onMarkStatus('RTO')}
-              disabled={isLoading}
-              className="flex items-center justify-center space-x-2 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-extrabold py-3 px-4 rounded-xl shadow-lg shadow-amber-600/30 transition-all cursor-pointer disabled:opacity-50"
+              className="flex items-center justify-center space-x-2.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-extrabold py-3.5 px-4 rounded-xl shadow-lg shadow-amber-600/30 transition-all cursor-pointer disabled:opacity-50"
             >
               <RotateCcw className="w-5 h-5 shrink-0" />
               <div className="text-left">
-                <div className="text-xs tracking-wider uppercase font-black">MARK RTO</div>
-                <div className="text-[10px] text-amber-200 font-normal">Return To Origin package</div>
+                <div className="text-sm tracking-wider font-black uppercase">RTS</div>
+                <div className="text-[10px] text-amber-200 font-normal">Return To Seller</div>
+              </div>
+            </button>
+
+            {/* Cancelled Button */}
+            <button
+              type="button"
+              onClick={() => onMarkStatus('CANCELLED')}
+              disabled={isLoading}
+              className="flex items-center justify-center space-x-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-extrabold py-3.5 px-4 rounded-xl shadow-lg shadow-rose-600/30 transition-all cursor-pointer disabled:opacity-50"
+            >
+              <Ban className="w-5 h-5 shrink-0" />
+              <div className="text-left">
+                <div className="text-sm tracking-wider font-black uppercase">Cancelled</div>
+                <div className="text-[10px] text-rose-200 font-normal">Mark order cancelled</div>
               </div>
             </button>
           </div>
@@ -121,10 +162,11 @@ export default function DuplicateModal({ data, onClose, onMarkStatus, isLoading 
           {/* Dismiss button */}
           <div className="text-center pt-1">
             <button
+              type="button"
               onClick={onClose}
-              className="text-xs text-slate-400 hover:text-white font-bold transition-colors cursor-pointer py-1 px-3 rounded-lg hover:bg-slate-800"
+              className="text-xs text-slate-400 hover:text-white font-semibold transition-colors cursor-pointer py-1 px-3 rounded-lg hover:bg-slate-800"
             >
-              Ignore & Keep Dispatched
+              Keep As Dispatched / Dismiss
             </button>
           </div>
         </div>

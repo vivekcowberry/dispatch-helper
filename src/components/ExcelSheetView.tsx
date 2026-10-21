@@ -27,10 +27,11 @@ interface Props {
   settings: AppSettings;
   onDelete: (id: string) => void;
   onUpdate?: (id: string, newBarcode: string, newCompany: string, status?: string) => void;
-  onMarkDuplicateStatus?: (duplicateId: string, existingScanId: string, status: 'CANCELLED' | 'RTO') => void;
+  onMarkDuplicateStatus?: (duplicateId: string, existingScanId: string, status: 'CANCELLED' | 'RTS' | 'RTO') => void;
   onRefocusInput: () => void;
   recentScanId?: string;
   duplicateFlashId?: string;
+  highlightCellId?: string;
   isReadOnly?: boolean;
   onUnlock?: () => void;
 }
@@ -49,6 +50,7 @@ export default function ExcelSheetView({
   onRefocusInput,
   recentScanId,
   duplicateFlashId,
+  highlightCellId,
   isReadOnly,
   onUnlock,
 }: Props) {
@@ -125,6 +127,16 @@ export default function ExcelSheetView({
       }
     }
   }, [duplicateFlashId, activeTab]);
+
+  // Scroll to highlighted cell (historical match)
+  useEffect(() => {
+    if (highlightCellId && activeTab === 'grid') {
+      const el = document.getElementById(`cell-${highlightCellId}`);
+      if (el && scrollRef.current) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      }
+    }
+  }, [highlightCellId, activeTab]);
 
   // Auto-focus inline input when editing
   useEffect(() => {
@@ -543,21 +555,24 @@ export default function ExcelSheetView({
                     const isSelected = selectedCell?.id === entry?.id;
                     const isRecent = recentScanId === entry?.id;
                     const isDuplicateFlash = duplicateFlashId === entry?.id;
+                    const isHighlighted = highlightCellId === entry?.id;
                     const isInlineEditing = editingInlineId === entry?.id;
                     const isCancelled = entry?.status?.toUpperCase() === 'CANCELLED';
-                    const isRto = entry?.status?.toUpperCase() === 'RTO';
+                    const isRts = entry?.status?.toUpperCase() === 'RTS' || entry?.status?.toUpperCase() === 'RTO';
                     
                     return (
                       <div 
                         key={`${h}-${rowIndex}`} 
                         className={`w-48 flex-shrink-0 border-b border-r border-slate-200 px-2 py-1.5 relative cursor-pointer select-none transition-all group ${
-                          isSelected 
+                          isHighlighted
+                            ? 'ring-4 ring-amber-500 ring-offset-2 ring-offset-white z-20 bg-amber-200/90 font-extrabold shadow-lg animate-pulse'
+                            : isSelected 
                             ? 'ring-2 ring-blue-600 ring-inset z-10 bg-blue-50 font-semibold shadow-xs' 
                             : isRowSelected && entry
                             ? 'bg-blue-50/40'
                             : isCancelled
                             ? 'bg-red-50/80 hover:bg-red-100/80'
-                            : isRto
+                            : isRts
                             ? 'bg-amber-50/80 hover:bg-amber-100/80'
                             : 'bg-white'
                         } ${
@@ -609,7 +624,7 @@ export default function ExcelSheetView({
                             <div className="flex items-center justify-between">
                               <div className="flex items-center space-x-1 truncate">
                                 <span className={`font-mono text-xs font-medium truncate ${
-                                  isCancelled ? 'line-through text-red-700' : isRto ? 'text-amber-800 font-semibold' : 'text-slate-800'
+                                  isCancelled ? 'line-through text-red-700' : isRts ? 'text-amber-800 font-semibold' : 'text-slate-800'
                                 }`}>
                                   {entry.barcode}
                                 </span>
@@ -618,9 +633,9 @@ export default function ExcelSheetView({
                                     CANCELLED
                                   </span>
                                 )}
-                                {isRto && (
+                                {isRts && (
                                   <span className="text-[9px] font-black uppercase bg-amber-500 text-white px-1 py-0.2 rounded shrink-0">
-                                    RTO
+                                    {entry.status?.toUpperCase() === 'RTO' ? 'RTO' : 'RTS'}
                                   </span>
                                 )}
                               </div>

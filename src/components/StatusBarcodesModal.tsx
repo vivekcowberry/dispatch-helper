@@ -14,7 +14,7 @@ interface Props {
   date: string;
   scans: ScanEntry[];
   duplicates?: DuplicateAttempt[];
-  onUpdateScanStatus: (id: string, status: 'DISPATCHED' | 'CANCELLED' | 'RTO') => Promise<void>;
+  onUpdateScanStatus: (id: string, status: 'DISPATCHED' | 'CANCELLED' | 'RTS' | 'RTO') => Promise<void>;
   onDeleteScan: (id: string) => Promise<void>;
   onViewInLog?: () => void;
 }
@@ -57,9 +57,9 @@ export default function StatusBarcodesModal({
     return scans.filter(s => s.status === 'CANCELLED');
   }, [scans]);
 
-  // Get all scans matching RTO
+  // Get all scans matching RTO / RTS
   const rtoItems = useMemo(() => {
-    return scans.filter(s => s.status === 'RTO');
+    return scans.filter(s => s.status === 'RTO' || s.status === 'RTS');
   }, [scans]);
 
   const activeItems = activeTab === 'CANCELLED' ? cancelledItems : rtoItems;

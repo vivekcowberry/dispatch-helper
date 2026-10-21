@@ -8,7 +8,8 @@ import { ScanEntry, AppSettings } from '@/types';
 import { 
   Calendar, Download, Upload, Plus, AlertCircle, FileSpreadsheet, 
   ChevronLeft, ChevronRight, Lock, Unlock, Wifi, WifiOff, Loader2,
-  Database, RefreshCw, LogOut, User as UserIcon, Ban, RotateCcw
+  Database, RefreshCw, LogOut, User as UserIcon, Ban, RotateCcw,
+  Search, X
 } from 'lucide-react';
 import ExcelSheetView from '@/components/ExcelSheetView';
 import LoginView from '@/components/LoginView';
@@ -71,6 +72,8 @@ function DispatchScannerApp() {
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error' | 'warning', title: string, text: string } | null>(null);
   const [recentScanId, setRecentScanId] = useState<string>('');
   const [duplicateFlashId, setDuplicateFlashId] = useState<string>('');
+  const [highlightCellId, setHighlightCellId] = useState<string>('');
+  const [isSearchingBarcode, setIsSearchingBarcode] = useState(false);
   
   const inputRef = useRef<HTMLInputElement>(null);
   const isPastDate = date !== todayStr;
@@ -189,28 +192,49 @@ function DispatchScannerApp() {
       try {
         const parsed = JSON.parse(err.message);
         if (parsed.error === "DUPLICATE") {
-          const existingCol = parsed.existing?.companyId || parsed.existing?.column || "another column";
-          setStatusMsg({ 
-            type: 'error', 
-            title: 'Duplicate Data', 
-            text: `Barcode ${newScan.barcode} already scanned in ${existingCol}.` 
-          });
-          const existingMatch = scans.find(s => s.barcode.toUpperCase() === newScan.barcode.toUpperCase());
-          if (existingMatch) {
-            setDuplicateFlashId(existingMatch.id);
-            setTimeout(() => setDuplicateFlashId(''), 3000);
+          const existing = parsed.existing;
+          const existingCol = existing?.companyId || existing?.column || "another column";
+          const existingDate = existing?.dispatchDate || date;
+          const cellAddress = existing?.cellAddress || "";
+          const excelFileName = existing?.excelFileName || "";
+          const sheetName = existing?.sheetName || "";
+          const matchedScanId = existing?.id || '';
+
+          // 1. Automatically open / navigate to historical date Excel file
+          if (existingDate && existingDate !== date) {
+            changeDate(existingDate);
           }
 
-          // Trigger Duplicate Popup Modal!
-          setDuplicateModalData({
-            barcode: newScan.barcode,
-            attemptedCompany: newScan.companyId,
-            existingScanId: parsed.existing?.id || existingMatch?.id || '',
-            existingCompany: existingCol,
-            existingDate: parsed.existing?.dispatchDate || date,
-            existingScannedAt: parsed.existing?.scannedAt,
-            duplicateAttemptId: parsed.duplicateAttemptId,
+          // 2. Highlight matching cell in that date's sheet
+          if (matchedScanId) {
+            setHighlightCellId(matchedScanId);
+            setDuplicateFlashId(matchedScanId);
+            setTimeout(() => setHighlightCellId(''), 8000);
+          }
+
+          setStatusMsg({ 
+            type: 'warning', 
+            title: 'Duplicate Barcode Found', 
+            text: `Barcode ${newScan.barcode} exists in ${formatFileDate(existingDate)} (Sheet: ${sheetName || 'Dispatch'}, Cell: ${cellAddress || 'N/A'}).` 
           });
+
+          // 3. Open duplicate popup modal after locating and highlighting cell
+          setTimeout(() => {
+            setDuplicateModalData({
+              barcode: newScan.barcode,
+              attemptedCompany: newScan.companyId,
+              existingScanId: matchedScanId,
+              existingCompany: existingCol,
+              existingDate: existingDate,
+              existingScannedAt: existing?.scannedAt,
+              duplicateAttemptId: parsed.duplicateAttemptId,
+              excelFileName: excelFileName,
+              sheetName: sheetName,
+              cellAddress: cellAddress,
+              gridRow: existing?.gridRow,
+            });
+          }, 450);
+
           refetchDuplicates();
         } else {
           setStatusMsg({ type: 'error', title: 'Scan Error', text: parsed.message || 'Failed to save scan.' });
@@ -314,7 +338,7 @@ function DispatchScannerApp() {
   });
 
   // Handle Mark Status from Duplicate Modal Popup
-  const handleMarkDuplicateStatus = async (status: 'CANCELLED' | 'RTO') => {
+  const handleMarkDuplicateStatus = async (status: 'RTS' | 'CANCELLED') => {
     if (!duplicateModalData) return;
     setIsMarkingDuplicate(true);
     try {
@@ -327,15 +351,21 @@ function DispatchScannerApp() {
           duplicateAttemptId: duplicateModalData.duplicateAttemptId,
         }),
       });
-      if (!res.ok) throw new Error("Failed to update duplicate status");
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || "Failed to update duplicate status");
+      }
 
       playSuccessSound();
+      queryClient.invalidateQueries({ queryKey: ['scans', duplicateModalData.existingDate] });
       queryClient.invalidateQueries({ queryKey: ['scans', date] });
       refetchDuplicates();
+      refetchDates();
+
       setStatusMsg({
-        type: 'warning',
+        type: 'success',
         title: `Marked as ${status}`,
-        text: `Barcode ${duplicateModalData.barcode} marked as ${status}.`,
+        text: `Barcode ${duplicateModalData.barcode} marked as ${status} in database and Excel.`,
       });
       setTimeout(() => setStatusMsg(null), 3000);
       setDuplicateModalData(null);
@@ -348,8 +378,83 @@ function DispatchScannerApp() {
     }
   };
 
+  // Global Barcode Search Across Entire Database
+  const handleSearchBarcode = async (rawCode?: string) => {
+    const barcodeToSearch = (rawCode !== undefined ? rawCode : inputValue).trim();
+    if (!barcodeToSearch) {
+      if (inputRef.current) inputRef.current.focus();
+      return;
+    }
+
+    setIsSearchingBarcode(true);
+    try {
+      const res = await fetch(`/api/scans/search?barcode=${encodeURIComponent(barcodeToSearch)}`);
+      const data = await res.json();
+
+      if (data.found && data.scan) {
+        const existing = data.scan;
+        const existingDate = existing.dispatchDate;
+        const cellAddress = existing.cellAddress;
+        const sheetName = existing.sheetName;
+        const excelFileName = existing.excelFileName;
+
+        // 1. Automatically open / navigate to historical date Excel file
+        if (existingDate && existingDate !== date) {
+          changeDate(existingDate);
+        }
+
+        // 2. Highlight matching cell in that date's sheet
+        setHighlightCellId(existing.id);
+        setDuplicateFlashId(existing.id);
+        setTimeout(() => setHighlightCellId(''), 8000);
+
+        playErrorSound();
+        setStatusMsg({
+          type: 'warning',
+          title: 'Duplicate Barcode Found',
+          text: `Barcode ${existing.barcode} exists in ${formatFileDate(existingDate)} (Sheet: ${sheetName || 'Dispatch'}, Cell: ${cellAddress || 'N/A'}).`,
+        });
+
+        // 3. Open duplicate popup modal after locating and highlighting cell
+        setTimeout(() => {
+          setDuplicateModalData({
+            barcode: existing.barcode,
+            attemptedCompany: activeHeader,
+            existingScanId: existing.id,
+            existingCompany: existing.companyId || existing.column,
+            existingDate: existingDate,
+            existingScannedAt: existing.scannedAt,
+            excelFileName: excelFileName,
+            sheetName: sheetName,
+            cellAddress: cellAddress,
+            gridRow: existing.gridRow,
+          });
+        }, 450);
+      } else {
+        // Genuinely new barcode
+        playSuccessSound();
+        setStatusMsg({
+          type: 'success',
+          title: 'Barcode Not Found in DB',
+          text: `Barcode "${barcodeToSearch}" does not exist anywhere in database. Ready to scan.`,
+        });
+        setTimeout(() => setStatusMsg(null), 3500);
+      }
+    } catch (e: any) {
+      playErrorSound();
+      setStatusMsg({
+        type: 'error',
+        title: 'Search Error',
+        text: 'Failed to search database for barcode.',
+      });
+      setTimeout(() => setStatusMsg(null), 3000);
+    } finally {
+      setIsSearchingBarcode(false);
+    }
+  };
+
   // Handle Mark Status from Duplicate Attempts Tab
-  const handleMarkDuplicateFromTab = async (duplicateId: string, existingScanId: string, status: 'CANCELLED' | 'RTO') => {
+  const handleMarkDuplicateFromTab = async (duplicateId: string, existingScanId: string, status: 'CANCELLED' | 'RTS' | 'RTO') => {
     try {
       const res = await fetch('/api/duplicates', {
         method: 'PATCH',
@@ -697,21 +802,47 @@ function DispatchScannerApp() {
                 </span>
                 <span className="text-[11px] text-slate-400 font-medium">Press Enter to scan</span>
               </div>
-              <form onSubmit={handleScan}>
-                <input 
-                  ref={inputRef} 
-                  type="text" 
-                  disabled={isReadOnly}
-                  className={`w-full text-2xl font-mono px-4 py-3 border-2 rounded-xl outline-none transition-all ${
-                    isReadOnly 
-                      ? 'bg-slate-100 border-slate-300 cursor-not-allowed text-slate-400' 
-                      : 'border-blue-500 focus:border-blue-600 focus:ring-4 focus:ring-blue-100 text-slate-900 bg-white'
-                  }`}
-                  placeholder={isReadOnly ? "Sheet is locked..." : "Scan or type barcode..."} 
-                  value={inputValue} 
-                  onChange={(e) => setInputValue(e.target.value)} 
-                  autoFocus 
-                />
+              <form onSubmit={handleScan} className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input 
+                    ref={inputRef} 
+                    type="text" 
+                    disabled={isReadOnly}
+                    className={`w-full text-2xl font-mono px-4 py-3 pr-10 border-2 rounded-xl outline-none transition-all ${
+                      isReadOnly 
+                        ? 'bg-slate-100 border-slate-300 cursor-not-allowed text-slate-400' 
+                        : 'border-blue-500 focus:border-blue-600 focus:ring-4 focus:ring-blue-100 text-slate-900 bg-white'
+                    }`}
+                    placeholder={isReadOnly ? "Sheet is locked..." : "Scan or type barcode..."} 
+                    value={inputValue} 
+                    onChange={(e) => setInputValue(e.target.value)} 
+                    autoFocus 
+                  />
+                  {inputValue && !isReadOnly && (
+                    <button
+                      type="button"
+                      onClick={() => { setInputValue(''); if (inputRef.current) inputRef.current.focus(); }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full cursor-pointer"
+                      title="Clear input"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSearchBarcode()}
+                  disabled={isSearchingBarcode || !inputValue.trim()}
+                  title="Search barcode globally across all historical dates and Excel sheets"
+                  className="px-4 py-3.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold rounded-xl flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer disabled:cursor-not-allowed shrink-0"
+                >
+                  {isSearchingBarcode ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Search className="w-5 h-5" />
+                  )}
+                  <span className="text-xs uppercase font-black hidden sm:inline">Search</span>
+                </button>
               </form>
 
               {/* Status Section Buttons (Cancelled & RTO) */}
@@ -789,6 +920,7 @@ function DispatchScannerApp() {
               settings={{ headers, activeHeader }}
               recentScanId={recentScanId}
               duplicateFlashId={duplicateFlashId}
+              highlightCellId={highlightCellId}
               onDelete={(id) => deleteMutation.mutate(id)}
               onUpdate={(id, newBarcode, newCompany, status) => updateMutation.mutate({ id, barcode: newBarcode, companyId: newCompany, status })}
               onMarkDuplicateStatus={handleMarkDuplicateFromTab}
