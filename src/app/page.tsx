@@ -9,12 +9,14 @@ import {
   Calendar, Download, Upload, Plus, AlertCircle, FileSpreadsheet, 
   ChevronLeft, ChevronRight, Lock, Unlock, Wifi, WifiOff, Loader2,
   Database, RefreshCw, LogOut, User as UserIcon, Ban, RotateCcw,
-  Search, X
+  Search, X, ChevronDown, HardDrive
 } from 'lucide-react';
 import ExcelSheetView from '@/components/ExcelSheetView';
 import LoginView from '@/components/LoginView';
 import DuplicateModal, { DuplicateModalData } from '@/components/DuplicateModal';
 import StatusBarcodesModal from '@/components/StatusBarcodesModal';
+import ImportExcelModal from '@/components/ImportExcelModal';
+import ManageRecordsModal from '@/components/ManageRecordsModal';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 const DEFAULT_HEADERS = ["Delhivery", "Amazon", "Instamart", "CRED", "Flipkart", "Blinkit"];
@@ -34,6 +36,34 @@ function DispatchScannerApp() {
 
   // Status Barcodes Modal (Cancelled / RTO)
   const [statusModalType, setStatusModalType] = useState<'CANCELLED' | 'RTO' | null>(null);
+
+  // Import Excel Modal & Manage Data Modal
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showManageModal, setShowManageModal] = useState(false);
+
+  // Profile Dropdown Menu State & Ref
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close profile dropdown on outside click or escape key
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setShowProfileMenu(false);
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowProfileMenu(false);
+    };
+    if (showProfileMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleEscape);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [showProfileMenu]);
 
   // Check auth session on load
   useEffect(() => {
@@ -617,7 +647,7 @@ function DispatchScannerApp() {
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans select-none">
       {/* Top Header Bar */}
-      <header className="bg-slate-900 text-white px-6 py-3 flex flex-wrap gap-4 items-center justify-between shadow-lg z-10 shrink-0">
+      <header className="relative z-40 bg-slate-900 text-white px-6 py-3 flex flex-wrap gap-4 items-center justify-between shadow-lg shrink-0">
         <div className="flex items-center space-x-6">
           <div className="flex items-center space-x-2">
             <FileSpreadsheet className="w-6 h-6 text-blue-400" />
@@ -673,45 +703,200 @@ function DispatchScannerApp() {
           </div>
         </div>
 
-        {/* Right Header Controls: Database Status, Export, Backup, User info & Logout */}
-        <div className="flex items-center space-x-3">
-         
-         
+        {/* Right Header Controls: Quick Actions & Profile Dropdown */}
+        <div className="flex items-center space-x-2.5">
+          {/* Quick Action: Import Excel */}
+          <button 
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-all cursor-pointer active:scale-95"
+            title="Bulk import barcodes directly below company headers"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Import Excel</span>
+          </button>
 
-          {/* Export Excel Button */}
+          {/* Quick Action: Export Excel */}
           <a 
             href={`/api/export?date=${date}`} 
             download
-            className="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow transition-colors"
+            className="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-all active:scale-95"
+            title="Download date Excel file"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Export Excel</span>
+            <span className="hidden sm:inline">Export Excel</span>
           </a>
 
-          {/* Database Backup Button */}
-          <a 
-            href="/api/backup" 
-            download
-            className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow transition-colors"
-          >
-            <Database className="w-3.5 h-3.5" />
-            <span>Backup DB</span>
-          </a>
-
-          {/* User info & Logout */}
-          <div className="flex items-center space-x-2 pl-2 border-l border-slate-700">
-            <div className="flex items-center space-x-1.5 text-xs text-slate-300 font-semibold bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700">
-              <UserIcon className="w-3.5 h-3.5 text-blue-400" />
-              <span className="truncate max-w-[140px]">{currentUser.username}</span>
-            </div>
-            <button 
-              onClick={handleLogout}
-              title="Sign Out"
-              className="flex items-center space-x-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+          {/* Profile Dropdown Container */}
+          <div className="relative pl-1.5" ref={profileMenuRef}>
+            <button
+              type="button"
+              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              className={`flex items-center space-x-2.5 p-1.5 pr-2.5 rounded-xl border transition-all cursor-pointer select-none ${
+                showProfileMenu 
+                  ? 'bg-slate-800 border-blue-500/60 ring-2 ring-blue-500/20' 
+                  : 'bg-slate-800/90 hover:bg-slate-800 border-slate-700 hover:border-slate-600'
+              }`}
+              title="Open profile menu"
             >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Logout</span>
+              {/* Profile Avatar Icon with Online Badge */}
+              <div className="relative">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 via-indigo-600 to-violet-500 text-white font-black flex items-center justify-center text-xs shadow-md border border-white/20">
+                  {currentUser.username ? currentUser.username.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
+              </div>
+
+              {/* User Name & Role */}
+              <div className="hidden md:flex flex-col text-left leading-tight">
+                <span className="text-xs font-bold text-white tracking-wide truncate max-w-[110px]">
+                  {currentUser.name || currentUser.username}
+                </span>
+                <span className="text-[10px] text-slate-400 font-medium">
+                  {currentUser.role || 'OPERATOR'}
+                </span>
+              </div>
+
+              {/* Animated Chevron */}
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${showProfileMenu ? 'rotate-180 text-blue-400' : ''}`} />
             </button>
+
+            {/* Dropdown Menu */}
+            {showProfileMenu && (
+              <div className="absolute right-0 mt-2 w-72 bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl py-2 z-50 text-white divide-y divide-slate-800 animate-in fade-in zoom-in-95 duration-150">
+                {/* Profile Card Header */}
+                <div className="px-4 py-3 flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-violet-500 text-white font-black flex items-center justify-center text-sm shadow-md border border-white/20 shrink-0">
+                    {currentUser.username ? currentUser.username.charAt(0).toUpperCase() : 'U'}
+                  </div>
+                  <div className="overflow-hidden flex-1">
+                    <div className="flex items-center space-x-1.5">
+                      <h3 className="text-sm font-extrabold text-white truncate">
+                        {currentUser.name || currentUser.username}
+                      </h3>
+                      <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase bg-blue-500/20 text-blue-400 border border-blue-400/30">
+                        {currentUser.role || 'OPERATOR'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 truncate">@{currentUser.username}</p>
+                  </div>
+                </div>
+
+                {/* Section: Data & Management Tools */}
+                <div className="py-1.5 px-1.5 space-y-0.5">
+                  <div className="px-2.5 py-1 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+                    Data & Tools
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => { setShowManageModal(true); setShowProfileMenu(false); }}
+                    className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-md bg-blue-500/10 text-blue-400 group-hover:bg-blue-500/20 transition-colors">
+                      <Database className="w-4 h-4" />
+                    </div>
+                    <div className="flex flex-col text-left">
+                      <span>Manage Imported Data</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Search, filter & edit records</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setShowImportModal(true); setShowProfileMenu(false); }}
+                    className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-500/20 transition-colors">
+                      <Upload className="w-4 h-4" />
+                    </div>
+                    <div className="flex flex-col text-left">
+                      <span>Import Excel Data</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Bulk upload below company headers</span>
+                    </div>
+                  </button>
+
+                  <a
+                    href={`/api/export?date=${date}`}
+                    download
+                    onClick={() => setShowProfileMenu(false)}
+                    className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-md bg-indigo-500/10 text-indigo-400 group-hover:bg-indigo-500/20 transition-colors">
+                      <Download className="w-4 h-4" />
+                    </div>
+                    <div className="flex flex-col text-left">
+                      <span>Export Date Sheet</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Download current date Excel</span>
+                    </div>
+                  </a>
+
+                  <a
+                    href="/api/backup"
+                    download
+                    onClick={() => setShowProfileMenu(false)}
+                    className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-md bg-purple-500/10 text-purple-400 group-hover:bg-purple-500/20 transition-colors">
+                      <HardDrive className="w-4 h-4" />
+                    </div>
+                    <div className="flex flex-col text-left">
+                      <span>Backup Database</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Full JSON snapshot download</span>
+                    </div>
+                  </a>
+                </div>
+
+                {/* Section: Status Lists */}
+                <div className="py-1.5 px-1.5 space-y-0.5">
+                  <div className="px-2.5 py-1 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+                    Status Overview
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => { setStatusModalType('CANCELLED'); setShowProfileMenu(false); }}
+                    className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-md bg-rose-500/10 text-rose-400 group-hover:bg-rose-500/20 transition-colors">
+                      <Ban className="w-4 h-4" />
+                    </div>
+                    <div className="flex flex-col text-left">
+                      <span>Cancelled Barcodes</span>
+                      <span className="text-[10px] text-slate-400 font-normal">View all cancelled scans</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setStatusModalType('RTO'); setShowProfileMenu(false); }}
+                    className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-md bg-amber-500/10 text-amber-400 group-hover:bg-amber-500/20 transition-colors">
+                      <RotateCcw className="w-4 h-4" />
+                    </div>
+                    <div className="flex flex-col text-left">
+                      <span>RTS / RTO Barcodes</span>
+                      <span className="text-[10px] text-slate-400 font-normal">View return-to-seller scans</span>
+                    </div>
+                  </button>
+                </div>
+
+                {/* Section: Logout */}
+                <div className="p-1.5">
+                  <button
+                    type="button"
+                    onClick={() => { setShowProfileMenu(false); handleLogout(); }}
+                    className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer group"
+                  >
+                    <div className="p-1.5 rounded-md bg-red-500/10 text-red-400 group-hover:bg-red-500/20 transition-colors">
+                      <LogOut className="w-4 h-4" />
+                    </div>
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -958,7 +1143,7 @@ function DispatchScannerApp() {
 
       {/* Add Custom Column Modal */}
       {showAddColumnModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[60]">
           <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full p-6">
             <h2 className="text-lg font-bold text-slate-800 mb-3">Add Custom Company Column</h2>
             <form onSubmit={(e) => {
@@ -995,6 +1180,33 @@ function DispatchScannerApp() {
           </div>
         </div>
       )}
+
+      {/* Import Excel Modal */}
+      <ImportExcelModal
+        isOpen={showImportModal}
+        onClose={() => { setShowImportModal(false); refocusInput(); }}
+        activeDate={date}
+        onImportComplete={(importedDate) => {
+          changeDate(importedDate);
+          queryClient.invalidateQueries({ queryKey: ['scans', importedDate] });
+          queryClient.invalidateQueries({ queryKey: ['scans', date] });
+          refetchDates();
+          refetchDuplicates();
+        }}
+      />
+
+      {/* Manage Imported Data Modal */}
+      <ManageRecordsModal
+        isOpen={showManageModal}
+        onClose={() => { setShowManageModal(false); refocusInput(); }}
+        activeDate={date}
+        companies={headers}
+        onRecordsChanged={() => {
+          queryClient.invalidateQueries({ queryKey: ['scans', date] });
+          refetchDates();
+          refetchDuplicates();
+        }}
+      />
     </div>
   );
 }

@@ -67,20 +67,30 @@ export async function resolveScanExcelLocation(
   const colLetter = getColumnLetter(companyIndex);
   const companyName = scan.company?.name || companies[companyIndex]?.name || 'Unknown';
 
-  // 2. Fetch all non-deleted scans for this company on this dispatchDate ordered by scannedAt asc
-  const companyScans = await txPrisma.scan.findMany({
-    where: {
-      dispatchDate: scan.dispatchDate,
-      companyId: scan.companyId,
-      deletedAt: null,
-    },
-    select: { id: true },
-    orderBy: { scannedAt: 'asc' },
-  });
+  // 2. Efficiently count preceding scans using database index instead of loading full array into memory
+  let scanIndex = 0;
+  let scannedAtDate: Date | null = scan.scannedAt ? new Date(scan.scannedAt) : null;
 
-  let scanIndex = companyScans.findIndex(s => s.id === scan.id);
-  if (scanIndex === -1) {
-    scanIndex = 0;
+  if (!scannedAtDate) {
+    const targetScan = await txPrisma.scan.findUnique({
+      where: { id: scan.id },
+      select: { scannedAt: true },
+    });
+    scannedAtDate = targetScan?.scannedAt || null;
+  }
+
+  if (scannedAtDate) {
+    scanIndex = await txPrisma.scan.count({
+      where: {
+        dispatchDate: scan.dispatchDate,
+        companyId: scan.companyId,
+        deletedAt: null,
+        OR: [
+          { scannedAt: { lt: scannedAtDate } },
+          { scannedAt: scannedAtDate, id: { lt: scan.id } },
+        ],
+      },
+    });
   }
 
   // Matching /api/export paging logic: MAX_ROWS_PER_SHEET = 30

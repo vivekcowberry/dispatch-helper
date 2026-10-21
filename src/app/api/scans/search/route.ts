@@ -14,17 +14,25 @@ export async function GET(req: Request) {
   const barcodeNormalized = barcode.toUpperCase();
 
   try {
-    // 1. Search across the entire database for any active historical scan
+    // 1. Search across the entire database for any active historical scan using composite index
     const scan = await prisma.scan.findFirst({
       where: {
         deletedAt: null,
         OR: [
-          { barcode },
           { barcodeNormalized },
+          { barcode },
         ],
       },
-      include: {
-        company: true,
+      select: {
+        id: true,
+        barcode: true,
+        companyId: true,
+        dispatchDate: true,
+        scannedAt: true,
+        status: true,
+        company: {
+          select: { id: true, name: true },
+        },
       },
       orderBy: { scannedAt: 'asc' },
     });
