@@ -263,6 +263,31 @@ export async function PATCH(req: Request) {
       }).catch(() => {});
     }
 
+    // Log audit history
+    let auditUserId = scan.scannedById;
+    if (!auditUserId) {
+      const defaultUser = await prisma.user.findFirst({ select: { id: true } });
+      auditUserId = defaultUser?.id || null;
+    }
+
+    if (auditUserId) {
+      await prisma.auditLog.create({
+        data: {
+          userId: auditUserId,
+          action: "RECORD_EDIT",
+          details: {
+            scanId: id,
+            oldBarcode: scan.barcode,
+            newBarcode: updated.barcode,
+            oldStatus: scan.status,
+            newStatus: updated.status,
+            oldCompanyId: scan.companyId,
+            newCompanyId: updated.companyId,
+          },
+        },
+      }).catch(() => {});
+    }
+
     return NextResponse.json({
       success: true,
       scan: {

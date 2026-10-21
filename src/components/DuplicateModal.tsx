@@ -32,7 +32,7 @@ export default function DuplicateModal({ data, onClose, onMarkStatus, isLoading 
 
   return (
     <div 
-      className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 select-none font-sans"
+      className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 z-[60] animate-in fade-in duration-200 select-none font-sans"
       onClick={onClose}
     >
       <div 

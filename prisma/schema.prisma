@@ -63,6 +63,12 @@ model Scan {
   @@index([dispatchDate])
   @@index([companyId])
   @@index([barcodeNormalized])
+  @@index([barcodeNormalized, deletedAt])
+  @@index([barcode, deletedAt])
+  @@index([dispatchDate, deletedAt])
+  @@index([dispatchDate, companyId, deletedAt])
+  @@index([status])
+  @@index([scannedAt])
 }
 
 enum Source {
