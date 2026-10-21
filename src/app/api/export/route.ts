@@ -73,13 +73,13 @@ export async function GET(req: Request) {
     let sheetIndex = 0;
 
     const columnsWidths: number[] = headers.map(() => 18);
-    const columnData: Record<string, string[]> = {};
+    const columnData: Record<string, Array<{ barcode: string; status?: string | null }>> = {};
     headers.forEach(h => columnData[h] = []);
 
     scans.forEach(s => {
       const colName = s.company.name;
       if (columnData[colName]) {
-        columnData[colName].push(s.barcode);
+        columnData[colName].push({ barcode: s.barcode, status: s.status });
       }
     });
 
@@ -94,12 +94,30 @@ export async function GET(req: Request) {
       }
       const row = currentSheet.getRow(currentRowIdx);
       headers.forEach((h, colIndex) => {
-        const val = columnData[h][i];
-        if (val) {
+        const item = columnData[h][i];
+        if (item) {
           const cell = row.getCell(colIndex + 1);
-          cell.value = val;
+          cell.value = item.barcode;
           cell.numFmt = '@';
-          columnsWidths[colIndex] = Math.max(columnsWidths[colIndex], val.length + 2);
+          
+          const s = (item.status || 'DISPATCHED').toUpperCase();
+          if (s === 'CANCELLED') {
+            cell.font = { strike: true, color: { argb: 'FFB91C1C' } };
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFFEE2E2' },
+            };
+          } else if (s === 'RTS' || s === 'RTO') {
+            cell.font = { bold: true, color: { argb: 'FFB45309' } };
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFFEF3C7' },
+            };
+          }
+          
+          columnsWidths[colIndex] = Math.max(columnsWidths[colIndex], item.barcode.length + 2);
         }
       });
       currentRowIdx++;

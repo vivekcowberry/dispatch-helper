@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import { resolveScanExcelLocation } from "@/lib/excel-location";
 
 const scanSchema = z.object({
   barcode: z.string().min(1).max(100).transform(val => val.replace(/[\x00-\x1F\x7F]/g, "")),
@@ -20,10 +21,6 @@ export async function POST(req: Request) {
 
     const { barcode, companyId, dispatchDate } = parsed.data;
     const barcodeNormalized = barcode.trim().toUpperCase();
-
-    // Check Duplicate Check Window (Default 1)
-    const setting = await prisma.setting.findUnique({ where: { key: "duplicateCheckDays" } });
-    const checkDays = setting && typeof setting.value === 'number' ? (setting.value as number) : 1;
 
     const result = await prisma.$transaction(async (tx) => {
       // 1. Resolve Company
@@ -44,7 +41,7 @@ export async function POST(req: Request) {
         });
       }
 
-      // 2. Find duplicates within window
+      // 2. Find duplicates across entire database (all historical records and dates)
       const existingScan = await tx.scan.findFirst({
         where: {
           barcodeNormalized,
@@ -54,38 +51,42 @@ export async function POST(req: Request) {
           company: true,
           scannedBy: { select: { name: true, username: true } }
         },
-        orderBy: { scannedAt: 'desc' }
+        orderBy: { scannedAt: 'asc' }
       });
 
       if (existingScan) {
-        const scanDate = new Date(existingScan.dispatchDate).getTime();
-        const currentDate = new Date(dispatchDate).getTime();
-        const daysDiff = (currentDate - scanDate) / (1000 * 60 * 60 * 24);
-        
-        if (daysDiff < checkDays) {
-          // Log duplicate attempt
-          const dup = await tx.duplicateAttempt.create({
-            data: {
-              barcode,
-              attemptedCompanyId: company.id,
-              existingScanId: existingScan.id,
-            }
-          });
-          
-          return {
-            error: "DUPLICATE",
-            duplicateAttemptId: dup.id,
-            existing: {
-              id: existingScan.id,
-              barcode: existingScan.barcode,
-              companyId: existingScan.company.name,
-              column: existingScan.company.name,
-              dispatchDate: existingScan.dispatchDate,
-              scannedAt: existingScan.scannedAt,
-              status: existingScan.status || "DISPATCHED",
-            }
-          };
-        }
+        // Log duplicate attempt
+        const dup = await tx.duplicateAttempt.create({
+          data: {
+            barcode,
+            attemptedCompanyId: company.id,
+            existingScanId: existingScan.id,
+          }
+        });
+
+        // Resolve exact Excel location in the original date's sheet
+        const location = await resolveScanExcelLocation(existingScan, tx as any);
+
+        return {
+          error: "DUPLICATE",
+          duplicateAttemptId: dup.id,
+          existing: {
+            id: existingScan.id,
+            barcode: existingScan.barcode,
+            companyId: existingScan.company.name,
+            column: existingScan.company.name,
+            dispatchDate: existingScan.dispatchDate,
+            scannedAt: existingScan.scannedAt,
+            status: existingScan.status || "DISPATCHED",
+            excelFileName: location.excelFileName,
+            sheetName: location.sheetName,
+            cellAddress: location.cellAddress,
+            colLetter: location.colLetter,
+            sheetRow: location.sheetRow,
+            gridRow: location.gridRow,
+            location,
+          }
+        };
       }
 
       // 3. Insert scan
@@ -194,7 +195,7 @@ const updateScanSchema = z.object({
   id: z.string(),
   barcode: z.string().min(1).max(100).transform(val => val.replace(/[\x00-\x1F\x7F]/g, "")).optional(),
   companyId: z.string().optional(),
-  status: z.enum(["DISPATCHED", "CANCELLED", "RTO"]).optional(),
+  status: z.enum(["DISPATCHED", "CANCELLED", "Cancelled", "RTS", "RTO"]).optional(),
   duplicateAttemptId: z.string().optional(),
 });
 
@@ -243,7 +244,8 @@ export async function PATCH(req: Request) {
     }
 
     if (status) {
-      updateData.status = status;
+      const normalizedStatus = status === "Cancelled" ? "CANCELLED" : status;
+      updateData.status = normalizedStatus;
     }
 
     // Update scan
@@ -257,7 +259,7 @@ export async function PATCH(req: Request) {
     if (duplicateAttemptId && status) {
       await prisma.duplicateAttempt.update({
         where: { id: duplicateAttemptId },
-        data: { status },
+        data: { status: updateData.status || status },
       }).catch(() => {});
     }
 
