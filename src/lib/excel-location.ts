@@ -93,17 +93,9 @@ export async function resolveScanExcelLocation(
     });
   }
 
-  // Matching /api/export paging logic: MAX_ROWS_PER_SHEET = 30
-  const MAX_ROWS_PER_SHEET = 30;
-  const partIndex = Math.floor(scanIndex / MAX_ROWS_PER_SHEET);
   const dateFormatted = formatFileDate(scan.dispatchDate);
-
-  const sheetName =
-    partIndex === 0
-      ? `Dispatch ${dateFormatted}`
-      : `Dispatch ${dateFormatted} - Part ${partIndex + 1}`;
-
-  const sheetRow = (scanIndex % MAX_ROWS_PER_SHEET) + 2; // header is row 1, data starts row 2
+  const sheetName = `Dispatch ${dateFormatted}`;
+  const sheetRow = scanIndex + 2; // header is row 1, data starts row 2
   const gridRow = scanIndex + 2;
   const cellAddress = `${colLetter}${sheetRow}`;
   const excelFileName = `Dispatch-${dateFormatted}.xlsx`;
