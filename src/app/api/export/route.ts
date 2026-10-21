@@ -41,36 +41,25 @@ export async function GET(req: Request) {
     const workbook = new ExcelJS.Workbook();
     const dateFormatted = date.split('-').reverse().join('-');
 
-    // Configuration: max rows per Dispatch sheet before paging
-    const MAX_ROWS_PER_SHEET = 30; // adjust as needed
-
-    // Helper to create a Dispatch worksheet with headers
-    const createDispatchSheet = (index: number) => {
-      const name = index === 0 ? `Dispatch ${dateFormatted}` : `Dispatch ${dateFormatted} - Part ${index + 1}`;
-      const sheet = workbook.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 1 }] });
-      sheet.getRow(1).values = headers;
-      const headerRow = sheet.getRow(1);
-      headerRow.font = { bold: true };
-      headerRow.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFEEEEEE' },
-      };
-      headerRow.eachCell((cell) => {
-        cell.border = {
-          top: { style: 'thin' },
-          left: { style: 'thin' },
-          bottom: { style: 'thin' },
-          right: { style: 'thin' },
-        };
-      });
-      return sheet;
+    // Create a single Dispatch worksheet containing all records for this date
+    const dispatchSheetName = `Dispatch ${dateFormatted}`;
+    const sheet1 = workbook.addWorksheet(dispatchSheetName, { views: [{ state: 'frozen', ySplit: 1 }] });
+    sheet1.getRow(1).values = headers;
+    const headerRow = sheet1.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFEEEEEE' },
     };
-
-    // Initialize first Dispatch sheet
-    let currentSheet = createDispatchSheet(0);
-    let currentRowIdx = 2; // start after header
-    let sheetIndex = 0;
+    headerRow.eachCell((cell) => {
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' },
+      };
+    });
 
     const columnsWidths: number[] = headers.map(() => 18);
     const columnData: Record<string, Array<{ barcode: string; status?: string | null }>> = {};
@@ -86,13 +75,7 @@ export async function GET(req: Request) {
     const maxRows = Math.max(...headers.map(h => columnData[h].length), 0);
 
     for (let i = 0; i < maxRows; i++) {
-      // If the current sheet exceeds the max rows, start a new sheet
-      if (currentRowIdx > MAX_ROWS_PER_SHEET + 1) {
-        sheetIndex++;
-        currentSheet = createDispatchSheet(sheetIndex);
-        currentRowIdx = 2; // reset for new sheet (header is row 1)
-      }
-      const row = currentSheet.getRow(currentRowIdx);
+      const row = sheet1.getRow(i + 2);
       headers.forEach((h, colIndex) => {
         const item = columnData[h][i];
         if (item) {
@@ -120,15 +103,9 @@ export async function GET(req: Request) {
           columnsWidths[colIndex] = Math.max(columnsWidths[colIndex], item.barcode.length + 2);
         }
       });
-      currentRowIdx++;
     }
 
-    // Apply column widths to all Dispatch sheets created
-    workbook.eachSheet((sheet) => {
-      if (sheet.name.startsWith('Dispatch')) {
-        sheet.columns = columnsWidths.map(w => ({ width: w }));
-      }
-    });
+    sheet1.columns = columnsWidths.map(w => ({ width: w }));
 
     // Sheet 2: Summary
     const sheet2 = workbook.addWorksheet('Summary');
